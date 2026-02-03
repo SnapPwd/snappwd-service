@@ -1,4 +1,5 @@
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post},
     Router,
 };
@@ -33,6 +34,7 @@ async fn main() {
         .route("/api/v1/secrets/:id", get(handlers::get_secret))
         .route("/api/v1/files", post(handlers::create_file))
         .route("/api/v1/files/:id", get(handlers::get_file))
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB limit for base64 overhead
         .with_state(client)
         .layer(CorsLayer::permissive()) // Allow all CORS for now, can be tightened
         .layer(TraceLayer::new_for_http());

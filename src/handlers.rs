@@ -90,3 +90,89 @@ pub async fn get_file(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::Body, extract::DefaultBodyLimit, http::{Request, StatusCode}, routing::post, Router};
+    use tower::ServiceExt; // for `oneshot`
+    use std::sync::Arc;
+    use redis::Client;
+
+    // Helper to create a dummy redis client (won't connect unless used)
+    fn dummy_client() -> Arc<Client> {
+        Arc::new(Client::open("redis://127.0.0.1/").unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_create_secret_invalid_expiration_low() {
+        let client = dummy_client();
+        let app = Router::new()
+            .route("/api/v1/secrets", post(create_secret))
+            .with_state(client);
+
+        let payload = r#"{"encryptedSecret": "test", "expiration": 10}"#; // Too low
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/secrets")
+            .header("content-type", "application/json")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_secret_invalid_expiration_high() {
+        let client = dummy_client();
+        let app = Router::new()
+            .route("/api/v1/secrets", post(create_secret))
+            .with_state(client);
+
+        let payload = r#"{"encryptedSecret": "test", "expiration": 10000000}"#; // Too high
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/secrets")
+            .header("content-type", "application/json")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_file_too_large() {
+        let client = dummy_client();
+        let app = Router::new()
+            .route("/api/v1/files", post(create_file))
+            .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // Increase limit for test
+            .with_state(client);
+
+        // Create a large string (base64) > 2MB (approx 2.7MB chars)
+        let large_data = "a".repeat(3_000_000);
+        let payload = serde_json::json!({
+            "metadata": {
+                "originalFilename": "large.txt",
+                "contentType": "text/plain",
+                "iv": "iv"
+            },
+            "encryptedData": large_data,
+            "expiration": 3600
+        });
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/files")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}
