@@ -3,11 +3,11 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use redis::Client;
 use std::env;
 use std::sync::Arc;
-use tower_http::trace::TraceLayer;
 use tower_http::cors::CorsLayer;
-use redis::Client;
+use tower_http::trace::TraceLayer;
 
 mod db;
 mod handlers;
@@ -25,7 +25,7 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    
+
     // Configurable max file size (MB) - default 2MB
     let max_file_size_mb: usize = env::var("MAX_FILE_SIZE_MB")
         .ok()
@@ -35,7 +35,7 @@ async fn main() {
 
     tracing::info!("Connecting to Redis at {}", redis_url);
     tracing::info!("Max file size configured to {} MB", max_file_size_mb);
-    
+
     let client = match db::get_redis_client(&redis_url).await {
         Ok(c) => Arc::new(c),
         Err(e) => {
@@ -55,10 +55,10 @@ async fn main() {
     let body_limit = std::cmp::max(10 * 1024 * 1024, max_file_size_bytes * 2);
 
     let app = Router::new()
-        .route("/api/v1/secrets", post(handlers::create_secret))
-        .route("/api/v1/secrets/:id", get(handlers::get_secret))
-        .route("/api/v1/files", post(handlers::create_file))
-        .route("/api/v1/files/:id", get(handlers::get_file))
+        .route("/v1/secrets", post(handlers::create_secret))
+        .route("/v1/secrets/:id", get(handlers::get_secret))
+        .route("/v1/files", post(handlers::create_file))
+        .route("/v1/files/:id", get(handlers::get_file))
         .layer(DefaultBodyLimit::max(body_limit))
         .with_state(state)
         .layer(CorsLayer::permissive()) // Allow all CORS for now, can be tightened

@@ -14,7 +14,7 @@ base64 = "0.21"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-bs58 = "0.5" # For short-uuid like behavior if needed, or I can just use uuid
+bs58 = "0.5"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
