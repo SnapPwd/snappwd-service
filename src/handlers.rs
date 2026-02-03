@@ -53,7 +53,7 @@ pub async fn get_secret(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<EncryptedSecretResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if !id.starts_with("sp-") {
+    if !id.starts_with("sp-") && !id.starts_with("sps-") && !id.starts_with("spf-") {
         return Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {

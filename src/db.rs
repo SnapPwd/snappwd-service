@@ -17,7 +17,7 @@ pub async fn store_secret(
     expiration: u64,
 ) -> Result<String, redis::RedisError> {
     let mut conn = client.get_multiplexed_async_connection().await?;
-    let id = format!("sp-{}", generate_short_id());
+    let id = format!("sps-{}", generate_short_id());
 
     // Set with expiration (SETEX equivalent)
     let _: () = conn.set_ex(&id, secret, expiration).await?;
