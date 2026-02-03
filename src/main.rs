@@ -7,10 +7,17 @@ use std::env;
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 use tower_http::cors::CorsLayer;
+use redis::Client;
 
 mod db;
 mod handlers;
 mod models;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub redis: Arc<Client>,
+    pub max_file_size_bytes: usize,
+}
 
 #[tokio::main]
 async fn main() {
@@ -19,7 +26,15 @@ async fn main() {
 
     let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
     
+    // Configurable max file size (MB) - default 2MB
+    let max_file_size_mb: usize = env::var("MAX_FILE_SIZE_MB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+    let max_file_size_bytes = max_file_size_mb * 1024 * 1024;
+
     tracing::info!("Connecting to Redis at {}", redis_url);
+    tracing::info!("Max file size configured to {} MB", max_file_size_mb);
     
     let client = match db::get_redis_client(&redis_url).await {
         Ok(c) => Arc::new(c),
@@ -29,13 +44,23 @@ async fn main() {
         }
     };
 
+    let state = AppState {
+        redis: client,
+        max_file_size_bytes,
+    };
+
+    // Calculate body limit safely (max_file_size_bytes * 1.5 for base64 + JSON overhead)
+    // Or just be generous with the transport limit since we validate logically in the handler.
+    // Let's go with 2x to be safe, minimum 10MB.
+    let body_limit = std::cmp::max(10 * 1024 * 1024, max_file_size_bytes * 2);
+
     let app = Router::new()
         .route("/api/v1/secrets", post(handlers::create_secret))
         .route("/api/v1/secrets/:id", get(handlers::get_secret))
         .route("/api/v1/files", post(handlers::create_file))
         .route("/api/v1/files/:id", get(handlers::get_file))
-        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB limit for base64 overhead
-        .with_state(client)
+        .layer(DefaultBodyLimit::max(body_limit))
+        .with_state(state)
         .layer(CorsLayer::permissive()) // Allow all CORS for now, can be tightened
         .layer(TraceLayer::new_for_http());
 
