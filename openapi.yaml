@@ -1,0 +1,277 @@
+openapi: 3.0.3
+info:
+  title: SnapPwd Service API
+  description: |
+    A secure, ephemeral secret and file sharing service. Data is stored encrypted
+    in Redis with automatic expiration and one-time access semantics - secrets and
+    files are deleted immediately after retrieval.
+  version: 1.0.0
+  contact:
+    name: OpenClaw
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+paths:
+  /v1/secrets:
+    post:
+      summary: Create a secret
+      description: Store an encrypted secret with time-based expiration
+      operationId: createSecret
+      tags:
+        - Secrets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecretRequest'
+      responses:
+        '201':
+          description: Secret created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretResponse'
+        '400':
+          description: Invalid expiration time (must be between 60 and 2592000 seconds)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/secrets/{id}:
+    get:
+      summary: Retrieve a secret
+      description: |
+        Retrieve and delete a secret in a single atomic operation.
+        The secret can only be accessed once - it is permanently deleted after retrieval.
+      operationId: getSecret
+      tags:
+        - Secrets
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Secret ID (must start with "sp-")
+          schema:
+            type: string
+            example: sp-7Yx8kN2mPqRs
+      responses:
+        '200':
+          description: Secret retrieved successfully (now deleted)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EncryptedSecretResponse'
+        '404':
+          description: Secret not found or already accessed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/files:
+    post:
+      summary: Create a file
+      description: Store an encrypted file with metadata and time-based expiration
+      operationId: createFile
+      tags:
+        - Files
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileRequest'
+      responses:
+        '201':
+          description: File created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileResponse'
+        '400':
+          description: Invalid request (expiration out of range or file too large)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/files/{id}:
+    get:
+      summary: Retrieve a file
+      description: |
+        Retrieve and delete a file in a single atomic operation.
+        The file can only be accessed once - it is permanently deleted after retrieval.
+      operationId: getFile
+      tags:
+        - Files
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: File ID (must start with "spf-")
+          schema:
+            type: string
+            example: spf-9Zw3mK7nPqTs
+      responses:
+        '200':
+          description: File retrieved successfully (now deleted)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoredFile'
+        '404':
+          description: File not found or already accessed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    SecretRequest:
+      type: object
+      required:
+        - encryptedSecret
+        - expiration
+      properties:
+        encryptedSecret:
+          type: string
+          description: The encrypted secret data
+          example: "U2FsdGVkX1+vupppZksvRf5pq5g5XjFRlipGLw=="
+        expiration:
+          type: integer
+          format: int64
+          minimum: 60
+          maximum: 2592000
+          description: Time in seconds until the secret expires (1 minute to 30 days)
+          example: 3600
+
+    SecretResponse:
+      type: object
+      required:
+        - secretId
+      properties:
+        secretId:
+          type: string
+          description: Unique identifier for retrieving the secret
+          pattern: ^sp-[A-Za-z0-9]+$
+          example: sp-7Yx8kN2mPqRs
+
+    EncryptedSecretResponse:
+      type: object
+      required:
+        - encryptedSecret
+      properties:
+        encryptedSecret:
+          type: string
+          description: The retrieved encrypted secret
+          example: "U2FsdGVkX1+vupppZksvRf5pq5g5XjFRlipGLw=="
+
+    FileMetadata:
+      type: object
+      required:
+        - originalFilename
+        - contentType
+        - iv
+      properties:
+        originalFilename:
+          type: string
+          description: Original filename
+          example: document.pdf
+        contentType:
+          type: string
+          description: MIME type of the file
+          example: application/pdf
+        iv:
+          type: string
+          description: Initialization vector for encryption
+          example: "abc123def456"
+
+    FileRequest:
+      type: object
+      required:
+        - metadata
+        - encryptedData
+        - expiration
+      properties:
+        metadata:
+          $ref: '#/components/schemas/FileMetadata'
+        encryptedData:
+          type: string
+          description: Base64-encoded encrypted file content
+          example: "SGVsbG8gV29ybGQh..."
+        expiration:
+          type: integer
+          format: int64
+          minimum: 60
+          maximum: 2592000
+          description: Time in seconds until the file expires (1 minute to 30 days)
+          example: 3600
+
+    FileResponse:
+      type: object
+      required:
+        - fileId
+      properties:
+        fileId:
+          type: string
+          description: Unique identifier for retrieving the file
+          pattern: ^spf-[A-Za-z0-9]+$
+          example: spf-9Zw3mK7nPqTs
+
+    StoredFile:
+      type: object
+      required:
+        - metadata
+        - encryptedData
+      properties:
+        metadata:
+          $ref: '#/components/schemas/FileMetadata'
+        encryptedData:
+          type: string
+          description: Base64-encoded encrypted file content
+          example: "SGVsbG8gV29ybGQh..."
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message describing what went wrong
+          example: "Invalid expiration: must be between 60 and 2592000 seconds"
+
+tags:
+  - name: Secrets
+    description: One-time secret sharing endpoints
+  - name: Files
+    description: One-time file sharing endpoints

@@ -1,9 +1,6 @@
 use crate::models::{FileMetadata, StoredFile};
 use redis::{AsyncCommands, Client};
-use std::sync::Arc;
 use uuid::Uuid;
-
-pub type Db = Arc<Client>;
 
 pub async fn get_redis_client(redis_url: &str) -> Result<Client, redis::RedisError> {
     Client::open(redis_url)

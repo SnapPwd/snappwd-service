@@ -49,6 +49,11 @@ pub struct StoredFile {
     pub encrypted_data: String,
 }
 
+#[derive(Serialize, Debug)]
+pub struct ErrorResponse {
+    pub error: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

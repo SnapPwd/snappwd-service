@@ -55,6 +55,7 @@ async fn main() {
     let body_limit = std::cmp::max(10 * 1024 * 1024, max_file_size_bytes * 2);
 
     let app = Router::new()
+        .route("/openapi.yaml", get(handlers::openapi))
         .route("/v1/secrets", post(handlers::create_secret))
         .route("/v1/secrets/:id", get(handlers::get_secret))
         .route("/v1/files", post(handlers::create_file))

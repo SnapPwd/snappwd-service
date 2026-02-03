@@ -1,28 +1,37 @@
 use crate::{
     db,
     models::{
-        self, EncryptedSecretResponse, FileRequest, FileResponse, SecretRequest, SecretResponse,
-        StoredFile,
+        EncryptedSecretResponse, ErrorResponse, FileRequest, FileResponse, SecretRequest,
+        SecretResponse, StoredFile,
     },
     AppState,
 };
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{header, StatusCode},
+    response::IntoResponse,
     Json,
 };
 
 const MIN_EXPIRATION_SECONDS: u64 = 60;
-const MAX_EXPIRATION_SECONDS: u64 = 604800; // 7 days
+const MAX_EXPIRATION_SECONDS: u64 = 2592000; // 30 days
+
+const OPENAPI_SPEC: &str = include_str!("../openapi.yaml");
+
+pub async fn openapi() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "application/yaml")], OPENAPI_SPEC)
+}
 
 pub async fn create_secret(
     State(state): State<AppState>,
     Json(payload): Json<SecretRequest>,
-) -> Result<Json<SecretResponse>, (StatusCode, String)> {
+) -> Result<Json<SecretResponse>, (StatusCode, Json<ErrorResponse>)> {
     if payload.expiration < MIN_EXPIRATION_SECONDS || payload.expiration > MAX_EXPIRATION_SECONDS {
         return Err((
             StatusCode::BAD_REQUEST,
-            "Invalid expiration time".to_string(),
+            Json(ErrorResponse {
+                error: "Invalid expiration time".to_string(),
+            }),
         ));
     }
 
@@ -32,7 +41,9 @@ pub async fn create_secret(
             tracing::error!("Redis error: {}", e);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal server error".to_string(),
+                Json(ErrorResponse {
+                    error: "Internal server error".to_string(),
+                }),
             ))
         }
     }
@@ -41,9 +52,14 @@ pub async fn create_secret(
 pub async fn get_secret(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<EncryptedSecretResponse>, (StatusCode, String)> {
+) -> Result<Json<EncryptedSecretResponse>, (StatusCode, Json<ErrorResponse>)> {
     if !id.starts_with("sp-") {
-        return Err((StatusCode::NOT_FOUND, "Secret not found".to_string()));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Secret not found".to_string(),
+            }),
+        ));
     }
 
     match db::get_secret(&state.redis, &id).await {
@@ -52,13 +68,17 @@ pub async fn get_secret(
         })),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            "Secret not found or already accessed".to_string(),
+            Json(ErrorResponse {
+                error: "Secret not found or already accessed".to_string(),
+            }),
         )),
         Err(e) => {
             tracing::error!("Redis error: {}", e);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal server error".to_string(),
+                Json(ErrorResponse {
+                    error: "Internal server error".to_string(),
+                }),
             ))
         }
     }
@@ -67,11 +87,13 @@ pub async fn get_secret(
 pub async fn create_file(
     State(state): State<AppState>,
     Json(payload): Json<FileRequest>,
-) -> Result<Json<FileResponse>, (StatusCode, String)> {
+) -> Result<Json<FileResponse>, (StatusCode, Json<ErrorResponse>)> {
     if payload.expiration < MIN_EXPIRATION_SECONDS || payload.expiration > MAX_EXPIRATION_SECONDS {
         return Err((
             StatusCode::BAD_REQUEST,
-            "Invalid expiration time".to_string(),
+            Json(ErrorResponse {
+                error: "Invalid expiration time".to_string(),
+            }),
         ));
     }
 
@@ -82,10 +104,12 @@ pub async fn create_file(
         // +4 padding safety
         return Err((
             StatusCode::BAD_REQUEST,
-            format!(
-                "File too large (max {}MB)",
-                state.max_file_size_bytes / 1024 / 1024
-            ),
+            Json(ErrorResponse {
+                error: format!(
+                    "File too large (max {}MB)",
+                    state.max_file_size_bytes / 1024 / 1024
+                ),
+            }),
         ));
     }
 
@@ -102,7 +126,9 @@ pub async fn create_file(
             tracing::error!("Redis error: {}", e);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal server error".to_string(),
+                Json(ErrorResponse {
+                    error: "Internal server error".to_string(),
+                }),
             ))
         }
     }
@@ -111,22 +137,31 @@ pub async fn create_file(
 pub async fn get_file(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<StoredFile>, (StatusCode, String)> {
+) -> Result<Json<StoredFile>, (StatusCode, Json<ErrorResponse>)> {
     if !id.starts_with("spf-") {
-        return Err((StatusCode::NOT_FOUND, "File not found".to_string()));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "File not found".to_string(),
+            }),
+        ));
     }
 
     match db::get_file(&state.redis, &id).await {
         Ok(Some(file)) => Ok(Json(file)),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            "File not found or already accessed".to_string(),
+            Json(ErrorResponse {
+                error: "File not found or already accessed".to_string(),
+            }),
         )),
         Err(e) => {
             tracing::error!("Redis error: {}", e);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal server error".to_string(),
+                Json(ErrorResponse {
+                    error: "Internal server error".to_string(),
+                }),
             ))
         }
     }
