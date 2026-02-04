@@ -78,6 +78,25 @@ pub struct StoredFile {
     pub metadata: FileMetadata,
     #[serde(rename = "encryptedData")]
     pub encrypted_data: String,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: u64,
+}
+
+/// Query params for GET /v1/files/{id}
+#[derive(Deserialize, Debug, Default)]
+pub struct GetFileParams {
+    #[serde(default)]
+    pub peek: bool,
+}
+
+/// Response for file peek=true
+#[derive(Serialize, Debug)]
+pub struct FilePeekResponse {
+    #[serde(rename = "createdAt")]
+    pub created_at: u64,
+    #[serde(rename = "ttlSeconds")]
+    pub ttl_seconds: i64,
+    pub metadata: FileMetadata,
 }
 
 #[derive(Serialize, Debug)]
@@ -197,5 +216,58 @@ mod tests {
         assert!(json.contains(r#""originalFilename":"test.txt""#));
         assert!(json.contains(r#""contentType":"text/plain""#));
         assert!(json.contains(r#""encryptedData":"data123""#));
+    }
+
+    #[test]
+    fn test_get_file_params_default() {
+        let params: GetFileParams = serde_json::from_str("{}").unwrap();
+        assert!(!params.peek);
+    }
+
+    #[test]
+    fn test_get_file_params_peek_true() {
+        let params: GetFileParams = serde_json::from_str(r#"{"peek":true}"#).unwrap();
+        assert!(params.peek);
+    }
+
+    #[test]
+    fn test_file_peek_response_serialization() {
+        let resp = FilePeekResponse {
+            created_at: 1706900000,
+            ttl_seconds: 298,
+            metadata: FileMetadata {
+                original_filename: "test.pdf".to_string(),
+                content_type: "application/pdf".to_string(),
+                iv: "abc123".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains(r#""createdAt":1706900000"#));
+        assert!(json.contains(r#""ttlSeconds":298"#));
+        assert!(json.contains(r#""originalFilename":"test.pdf""#));
+        assert!(json.contains(r#""contentType":"application/pdf""#));
+    }
+
+    #[test]
+    fn test_stored_file_with_created_at() {
+        let stored = StoredFile {
+            metadata: FileMetadata {
+                original_filename: "doc.txt".to_string(),
+                content_type: "text/plain".to_string(),
+                iv: "iv456".to_string(),
+            },
+            encrypted_data: "encrypted123".to_string(),
+            created_at: 1706900000,
+        };
+        let json = serde_json::to_string(&stored).unwrap();
+        assert!(json.contains(r#""createdAt":1706900000"#));
+    }
+
+    #[test]
+    fn test_stored_file_deserialize_without_created_at_defaults_to_zero() {
+        // Legacy files without createdAt should deserialize with created_at = 0
+        let json = r#"{"metadata":{"originalFilename":"old.txt","contentType":"text/plain","iv":"iv"},"encryptedData":"data"}"#;
+        let stored: StoredFile = serde_json::from_str(json).unwrap();
+        assert_eq!(stored.created_at, 0);
     }
 }

@@ -135,8 +135,8 @@ paths:
     get:
       summary: Retrieve a file
       description: |
-        Retrieve and delete a file in a single atomic operation.
-        The file can only be accessed once - it is permanently deleted after retrieval.
+        Retrieve a file. By default, the file is deleted after retrieval (one-time access).
+        Use `?peek=true` to view metadata without burning the file.
       operationId: getFile
       tags:
         - Files
@@ -148,13 +148,27 @@ paths:
           schema:
             type: string
             example: spf-9Zw3mK7nPqTs
+        - name: peek
+          in: query
+          required: false
+          description: |
+            If true, returns metadata (creation time, TTL, file metadata) without
+            deleting the file. The file remains available for future access.
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
-          description: File retrieved successfully (now deleted)
+          description: |
+            File retrieved successfully. Response format depends on the `peek` parameter:
+            - `peek=false` (default): Returns the full file with encrypted data (file is now deleted)
+            - `peek=true`: Returns metadata only (file is preserved)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StoredFile'
+                oneOf:
+                  - $ref: '#/components/schemas/StoredFile'
+                  - $ref: '#/components/schemas/FilePeekResponse'
         '404':
           description: File not found or already accessed
           content:
@@ -300,6 +314,26 @@ components:
           type: string
           description: Base64-encoded encrypted file content
           example: "SGVsbG8gV29ybGQh..."
+
+    FilePeekResponse:
+      type: object
+      required:
+        - createdAt
+        - ttlSeconds
+        - metadata
+      properties:
+        createdAt:
+          type: integer
+          format: int64
+          description: Unix timestamp when the file was created (0 for legacy files)
+          example: 1706900000
+        ttlSeconds:
+          type: integer
+          format: int64
+          description: Remaining time-to-live in seconds (-1 if no expiration, -2 if key doesn't exist)
+          example: 298
+        metadata:
+          $ref: '#/components/schemas/FileMetadata'
 
     ErrorResponse:
       type: object

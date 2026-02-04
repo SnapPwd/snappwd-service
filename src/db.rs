@@ -111,6 +111,7 @@ pub async fn store_file(
     let stored_file = StoredFile {
         metadata,
         encrypted_data,
+        created_at: current_timestamp(),
     };
 
     let json_val = serde_json::to_string(&stored_file).map_err(|e| {
@@ -143,4 +144,33 @@ pub async fn get_file(client: &Client, id: &str) -> Result<Option<StoredFile>, r
     }
 
     Ok(None)
+}
+
+/// Peek at a file without burning it. Returns (StoredFile, ttl_seconds).
+/// For legacy files without created_at, returns created_at=0.
+pub async fn peek_file(
+    client: &Client,
+    id: &str,
+) -> Result<Option<(StoredFile, i64)>, redis::RedisError> {
+    let mut conn = client.get_multiplexed_async_connection().await?;
+
+    // Use GET (not GETDEL) to preserve the file
+    let result: Option<String> = conn.get(id).await?;
+
+    match result {
+        Some(json_str) => {
+            // Get TTL
+            let ttl: i64 = conn.ttl(id).await?;
+
+            let stored: StoredFile = serde_json::from_str(&json_str).map_err(|e| {
+                redis::RedisError::from((
+                    redis::ErrorKind::TypeError,
+                    "Deserialization error",
+                    e.to_string(),
+                ))
+            })?;
+            Ok(Some((stored, ttl)))
+        }
+        None => Ok(None),
+    }
 }

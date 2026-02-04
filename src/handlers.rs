@@ -1,8 +1,8 @@
 use crate::{
     db,
     models::{
-        EncryptedSecretResponse, ErrorResponse, FileRequest, FileResponse, GetSecretParams,
-        SecretPeekResponse, SecretRequest, SecretResponse, StoredFile,
+        EncryptedSecretResponse, ErrorResponse, FilePeekResponse, FileRequest, FileResponse,
+        GetFileParams, GetSecretParams, SecretPeekResponse, SecretRequest, SecretResponse,
     },
     AppState,
 };
@@ -177,32 +177,64 @@ pub async fn create_file(
 pub async fn get_file(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<StoredFile>, (StatusCode, Json<ErrorResponse>)> {
+    Query(params): Query<GetFileParams>,
+) -> impl IntoResponse {
     if !id.starts_with("spf-") {
-        return Err((
+        return (
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "File not found".to_string(),
-            }),
-        ));
+            Json(serde_json::json!({"error": "File not found"})),
+        )
+            .into_response();
     }
 
-    match db::get_file(&state.redis, &id).await {
-        Ok(Some(file)) => Ok(Json(file)),
-        Ok(None) => Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "File not found or already accessed".to_string(),
-            }),
-        )),
-        Err(e) => {
-            tracing::error!("Redis error: {}", e);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
+    if params.peek {
+        // Peek mode: return metadata without burning the file
+        match db::peek_file(&state.redis, &id).await {
+            Ok(Some((stored, ttl))) => Json(FilePeekResponse {
+                created_at: stored.created_at,
+                ttl_seconds: ttl,
+                metadata: stored.metadata,
+            })
+            .into_response(),
+            Ok(None) => (
+                StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    error: "Internal server error".to_string(),
+                    error: "File not found or already accessed".to_string(),
                 }),
-            ))
+            )
+                .into_response(),
+            Err(e) => {
+                tracing::error!("Redis error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "Internal server error".to_string(),
+                    }),
+                )
+                    .into_response()
+            }
+        }
+    } else {
+        // Burn mode: retrieve and delete
+        match db::get_file(&state.redis, &id).await {
+            Ok(Some(file)) => Json(file).into_response(),
+            Ok(None) => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "File not found or already accessed".to_string(),
+                }),
+            )
+                .into_response(),
+            Err(e) => {
+                tracing::error!("Redis error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "Internal server error".to_string(),
+                    }),
+                )
+                    .into_response()
+            }
         }
     }
 }
@@ -299,5 +331,45 @@ mod tests {
         let response = app.oneshot(req).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_get_file_invalid_id_returns_404() {
+        use axum::routing::get;
+
+        let state = dummy_state();
+        let app = Router::new()
+            .route("/api/v1/files/{id}", get(get_file))
+            .with_state(state);
+
+        // Invalid prefix (not spf-)
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/files/invalid-id")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_get_file_with_peek_param_invalid_id_returns_404() {
+        use axum::routing::get;
+
+        let state = dummy_state();
+        let app = Router::new()
+            .route("/api/v1/files/{id}", get(get_file))
+            .with_state(state);
+
+        // Invalid prefix with peek=true
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/files/invalid-id?peek=true")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
