@@ -55,9 +55,10 @@ docker run -d \
 
 ## API Endpoints
 
-- `POST /v1/secrets`: Store an encrypted secret (returns ID).
-- `GET /v1/secrets/:id`: Retrieve an encrypted secret (burns on read if configured).
-- `GET /health`: Health check.
+- `POST /v1/secrets`: Store an encrypted secret with time-based expiration.
+- `GET /v1/secrets/{id}`: Retrieve a secret. Deletes after retrieval by default. Use `?peek=true` to view metadata without deleting.
+- `POST /v1/files`: Store an encrypted file with metadata and time-based expiration.
+- `GET /v1/files/{id}`: Retrieve and delete a file in a single atomic operation.
 
 ## License
 
