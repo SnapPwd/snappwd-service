@@ -5,6 +5,37 @@ pub struct SecretRequest {
     #[serde(rename = "encryptedSecret")]
     pub encrypted_secret: String,
     pub expiration: u64,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Internal storage format for secrets (JSON in Redis)
+#[derive(Deserialize, Serialize, Debug)]
+pub struct StoredSecret {
+    #[serde(rename = "encryptedSecret")]
+    pub encrypted_secret: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: u64,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Query params for GET /v1/secrets/{id}
+#[derive(Deserialize, Debug, Default)]
+pub struct GetSecretParams {
+    #[serde(default)]
+    pub peek: bool,
+}
+
+/// Response for peek=true
+#[derive(Serialize, Debug)]
+pub struct SecretPeekResponse {
+    #[serde(rename = "createdAt")]
+    pub created_at: u64,
+    #[serde(rename = "ttlSeconds")]
+    pub ttl_seconds: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Debug)]
@@ -63,9 +94,23 @@ mod tests {
         let req = SecretRequest {
             encrypted_secret: "abc".to_string(),
             expiration: 3600,
+            metadata: None,
         };
         let json = serde_json::to_string(&req).unwrap();
-        assert_eq!(json, r#"{"encryptedSecret":"abc","expiration":3600}"#);
+        assert_eq!(json, r#"{"encryptedSecret":"abc","expiration":3600,"metadata":null}"#);
+    }
+
+    #[test]
+    fn test_secret_request_serialization_with_metadata() {
+        let req = SecretRequest {
+            encrypted_secret: "abc".to_string(),
+            expiration: 3600,
+            metadata: Some(serde_json::json!({"label": "test"})),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""encryptedSecret":"abc""#));
+        assert!(json.contains(r#""expiration":3600"#));
+        assert!(json.contains(r#""metadata":{"label":"test"}"#));
     }
 
     #[test]
@@ -74,6 +119,66 @@ mod tests {
         let req: SecretRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.encrypted_secret, "abc");
         assert_eq!(req.expiration, 3600);
+        assert!(req.metadata.is_none());
+    }
+
+    #[test]
+    fn test_secret_request_deserialization_with_metadata() {
+        let json = r#"{"encryptedSecret":"abc","expiration":3600,"metadata":{"label":"test"}}"#;
+        let req: SecretRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.encrypted_secret, "abc");
+        assert_eq!(req.expiration, 3600);
+        assert!(req.metadata.is_some());
+        assert_eq!(req.metadata.unwrap()["label"], "test");
+    }
+
+    #[test]
+    fn test_stored_secret_serialization() {
+        let stored = StoredSecret {
+            encrypted_secret: "secret123".to_string(),
+            created_at: 1706900000,
+            metadata: Some(serde_json::json!({"label": "test"})),
+        };
+        let json = serde_json::to_string(&stored).unwrap();
+        assert!(json.contains(r#""encryptedSecret":"secret123""#));
+        assert!(json.contains(r#""createdAt":1706900000"#));
+        assert!(json.contains(r#""metadata":{"label":"test"}"#));
+    }
+
+    #[test]
+    fn test_get_secret_params_default() {
+        let params: GetSecretParams = serde_json::from_str("{}").unwrap();
+        assert!(!params.peek);
+    }
+
+    #[test]
+    fn test_get_secret_params_peek_true() {
+        let params: GetSecretParams = serde_json::from_str(r#"{"peek":true}"#).unwrap();
+        assert!(params.peek);
+    }
+
+    #[test]
+    fn test_secret_peek_response_serialization() {
+        let resp = SecretPeekResponse {
+            created_at: 1706900000,
+            ttl_seconds: 298,
+            metadata: Some(serde_json::json!({"label": "test"})),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains(r#""createdAt":1706900000"#));
+        assert!(json.contains(r#""ttlSeconds":298"#));
+        assert!(json.contains(r#""metadata":{"label":"test"}"#));
+    }
+
+    #[test]
+    fn test_secret_peek_response_no_metadata() {
+        let resp = SecretPeekResponse {
+            created_at: 1706900000,
+            ttl_seconds: 298,
+            metadata: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(!json.contains("metadata"));
     }
 
     #[test]

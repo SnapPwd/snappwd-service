@@ -1,13 +1,13 @@
 use crate::{
     db,
     models::{
-        EncryptedSecretResponse, ErrorResponse, FileRequest, FileResponse, SecretRequest,
-        SecretResponse, StoredFile,
+        EncryptedSecretResponse, ErrorResponse, FileRequest, FileResponse, GetSecretParams,
+        SecretPeekResponse, SecretRequest, SecretResponse, StoredFile,
     },
     AppState,
 };
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, StatusCode},
     response::IntoResponse,
     Json,
@@ -35,7 +35,14 @@ pub async fn create_secret(
         ));
     }
 
-    match db::store_secret(&state.redis, payload.encrypted_secret, payload.expiration).await {
+    match db::store_secret(
+        &state.redis,
+        payload.encrypted_secret,
+        payload.expiration,
+        payload.metadata,
+    )
+    .await
+    {
         Ok(id) => Ok(Json(SecretResponse { secret_id: id })),
         Err(e) => {
             tracing::error!("Redis error: {}", e);
@@ -52,34 +59,67 @@ pub async fn create_secret(
 pub async fn get_secret(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<EncryptedSecretResponse>, (StatusCode, Json<ErrorResponse>)> {
+    Query(params): Query<GetSecretParams>,
+) -> impl IntoResponse {
     if !id.starts_with("sp-") && !id.starts_with("sps-") && !id.starts_with("spf-") {
-        return Err((
+        return (
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "Secret not found".to_string(),
-            }),
-        ));
+            Json(serde_json::json!({"error": "Secret not found"})),
+        )
+            .into_response();
     }
 
-    match db::get_secret(&state.redis, &id).await {
-        Ok(Some(secret)) => Ok(Json(EncryptedSecretResponse {
-            encrypted_secret: secret,
-        })),
-        Ok(None) => Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "Secret not found or already accessed".to_string(),
-            }),
-        )),
-        Err(e) => {
-            tracing::error!("Redis error: {}", e);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
+    if params.peek {
+        // Peek mode: return metadata without burning the secret
+        match db::peek_secret(&state.redis, &id).await {
+            Ok(Some((stored, ttl))) => Json(SecretPeekResponse {
+                created_at: stored.created_at,
+                ttl_seconds: ttl,
+                metadata: stored.metadata,
+            })
+            .into_response(),
+            Ok(None) => (
+                StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
-                    error: "Internal server error".to_string(),
+                    error: "Secret not found or already accessed".to_string(),
                 }),
-            ))
+            )
+                .into_response(),
+            Err(e) => {
+                tracing::error!("Redis error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "Internal server error".to_string(),
+                    }),
+                )
+                    .into_response()
+            }
+        }
+    } else {
+        // Burn mode: retrieve and delete
+        match db::get_secret(&state.redis, &id).await {
+            Ok(Some(secret)) => Json(EncryptedSecretResponse {
+                encrypted_secret: secret,
+            })
+            .into_response(),
+            Ok(None) => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Secret not found or already accessed".to_string(),
+                }),
+            )
+                .into_response(),
+            Err(e) => {
+                tracing::error!("Redis error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "Internal server error".to_string(),
+                    }),
+                )
+                    .into_response()
+            }
         }
     }
 }

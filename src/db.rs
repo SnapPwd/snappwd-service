@@ -1,5 +1,6 @@
-use crate::models::{FileMetadata, StoredFile};
+use crate::models::{FileMetadata, StoredFile, StoredSecret};
 use redis::{AsyncCommands, Client};
+use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 pub async fn get_redis_client(redis_url: &str) -> Result<Client, redis::RedisError> {
@@ -11,16 +12,37 @@ fn generate_short_id() -> String {
     bs58::encode(uuid.as_bytes()).into_string()
 }
 
+fn current_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 pub async fn store_secret(
     client: &Client,
     secret: String,
     expiration: u64,
+    metadata: Option<serde_json::Value>,
 ) -> Result<String, redis::RedisError> {
     let mut conn = client.get_multiplexed_async_connection().await?;
     let id = format!("sps-{}", generate_short_id());
 
-    // Set with expiration (SETEX equivalent)
-    let _: () = conn.set_ex(&id, secret, expiration).await?;
+    let stored = StoredSecret {
+        encrypted_secret: secret,
+        created_at: current_timestamp(),
+        metadata,
+    };
+
+    let json_val = serde_json::to_string(&stored).map_err(|e| {
+        redis::RedisError::from((
+            redis::ErrorKind::TypeError,
+            "Serialization error",
+            e.to_string(),
+        ))
+    })?;
+
+    let _: () = conn.set_ex(&id, json_val, expiration).await?;
 
     Ok(id)
 }
@@ -28,31 +50,53 @@ pub async fn store_secret(
 pub async fn get_secret(client: &Client, id: &str) -> Result<Option<String>, redis::RedisError> {
     let mut conn = client.get_multiplexed_async_connection().await?;
 
-    // GETDEL is available in newer Redis versions. If not, we might need a Lua script or GET + DEL transaction.
-    // The rust redis crate supports simple commands. checking if get_del exists.
-    // It seems `redis::AsyncCommands` has `get_del` in newer versions.
-    // If not, we can use `cmd("GETDEL").arg(id).query_async(&mut conn).await`
-
-    // Using generic cmd for broad compatibility
-    let result: Option<String> = redis::cmd("GETDEL")
-        .arg(id)
-        .query_async(&mut conn)
-        .await
-        .ok(); // Treat errors (like command not supported) as None for now, or fallback?
-               // Actually, GETDEL was added in Redis 6.2. It should be standard.
-               // But if it fails, let's try to propagate error.
-
-    if result.is_some() {
-        return Ok(result);
-    }
-
-    // If GETDEL returned null (None), it's already gone.
-    // Wait, if command failed, result is None? No, query_async returns Result.
-    // Let's retry properly.
-
     let result: Option<String> = redis::cmd("GETDEL").arg(id).query_async(&mut conn).await?;
 
-    Ok(result)
+    match result {
+        Some(json_str) => {
+            // Try to parse as StoredSecret (new format)
+            if let Ok(stored) = serde_json::from_str::<StoredSecret>(&json_str) {
+                Ok(Some(stored.encrypted_secret))
+            } else {
+                // Legacy format: plain string
+                Ok(Some(json_str))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+/// Peek at a secret without burning it. Returns (StoredSecret, ttl_seconds).
+/// For legacy secrets (plain string), returns created_at=0 and metadata=None.
+pub async fn peek_secret(
+    client: &Client,
+    id: &str,
+) -> Result<Option<(StoredSecret, i64)>, redis::RedisError> {
+    let mut conn = client.get_multiplexed_async_connection().await?;
+
+    // Use GET (not GETDEL) to preserve the secret
+    let result: Option<String> = conn.get(id).await?;
+
+    match result {
+        Some(json_str) => {
+            // Get TTL
+            let ttl: i64 = conn.ttl(id).await?;
+
+            // Try to parse as StoredSecret (new format)
+            if let Ok(stored) = serde_json::from_str::<StoredSecret>(&json_str) {
+                Ok(Some((stored, ttl)))
+            } else {
+                // Legacy format: plain string - create a synthetic StoredSecret
+                let legacy_stored = StoredSecret {
+                    encrypted_secret: json_str,
+                    created_at: 0,
+                    metadata: None,
+                };
+                Ok(Some((legacy_stored, ttl)))
+            }
+        }
+        None => Ok(None),
+    }
 }
 
 pub async fn store_file(

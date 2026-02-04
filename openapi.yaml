@@ -51,8 +51,8 @@ paths:
     get:
       summary: Retrieve a secret
       description: |
-        Retrieve and delete a secret in a single atomic operation.
-        The secret can only be accessed once - it is permanently deleted after retrieval.
+        Retrieve a secret. By default, the secret is deleted after retrieval (one-time access).
+        Use `?peek=true` to view metadata without burning the secret.
       operationId: getSecret
       tags:
         - Secrets
@@ -60,17 +60,31 @@ paths:
         - name: id
           in: path
           required: true
-          description: Secret ID (must start with "sp-")
+          description: Secret ID (must start with "sps-")
           schema:
             type: string
-            example: sp-7Yx8kN2mPqRs
+            example: sps-7Yx8kN2mPqRs
+        - name: peek
+          in: query
+          required: false
+          description: |
+            If true, returns metadata (creation time, TTL, custom metadata) without
+            deleting the secret. The secret remains available for future access.
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
-          description: Secret retrieved successfully (now deleted)
+          description: |
+            Secret retrieved successfully. Response format depends on the `peek` parameter:
+            - `peek=false` (default): Returns the encrypted secret (secret is now deleted)
+            - `peek=true`: Returns metadata only (secret is preserved)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EncryptedSecretResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/EncryptedSecretResponse'
+                  - $ref: '#/components/schemas/SecretPeekResponse'
         '404':
           description: Secret not found or already accessed
           content:
@@ -173,6 +187,11 @@ components:
           maximum: 2592000
           description: Time in seconds until the secret expires (1 minute to 30 days)
           example: 3600
+        metadata:
+          type: object
+          nullable: true
+          description: Optional custom metadata to store with the secret (viewable via peek)
+          example: {"label": "API key for staging"}
 
     SecretResponse:
       type: object
@@ -194,6 +213,28 @@ components:
           type: string
           description: The retrieved encrypted secret
           example: "U2FsdGVkX1+vupppZksvRf5pq5g5XjFRlipGLw=="
+
+    SecretPeekResponse:
+      type: object
+      required:
+        - createdAt
+        - ttlSeconds
+      properties:
+        createdAt:
+          type: integer
+          format: int64
+          description: Unix timestamp when the secret was created (0 for legacy secrets)
+          example: 1706900000
+        ttlSeconds:
+          type: integer
+          format: int64
+          description: Remaining time-to-live in seconds (-1 if no expiration, -2 if key doesn't exist)
+          example: 298
+        metadata:
+          type: object
+          nullable: true
+          description: Custom metadata stored with the secret (null for legacy secrets)
+          example: {"label": "API key for staging"}
 
     FileMetadata:
       type: object
