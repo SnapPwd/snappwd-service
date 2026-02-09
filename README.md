@@ -1,5 +1,7 @@
 # SnapPwd Service (API)
 
+[![Live App](https://img.shields.io/badge/Live_App-snappwd.io-00C853?style=for-the-badge&logo=appveyor)](https://snappwd.io)
+
 The high-performance, open-source backend API for [SnapPwd](https://snappwd.io). Built with Rust (Axum) and Redis.
 
 This service powers:
