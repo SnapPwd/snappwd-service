@@ -42,12 +42,43 @@ pub struct SecretPeekResponse {
 pub struct SecretResponse {
     #[serde(rename = "secretId")]
     pub secret_id: String,
+    #[serde(rename = "receiptId")]
+    pub receipt_id: String,
+    #[serde(rename = "receiptToken")]
+    pub receipt_token: String,
 }
 
 #[derive(Serialize, Debug)]
 pub struct EncryptedSecretResponse {
     #[serde(rename = "encryptedSecret")]
     pub encrypted_secret: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ReceiptStatusRequest {
+    #[serde(rename = "receiptToken")]
+    pub receipt_token: String,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiptStatus {
+    NotAccessed,
+    Accessed,
+    ExpiredUnavailable,
+}
+
+#[derive(Serialize, Debug)]
+pub struct ReceiptStatusResponse {
+    #[serde(rename = "receiptId")]
+    pub receipt_id: String,
+    pub status: ReceiptStatus,
+    #[serde(rename = "accessedAt", skip_serializing_if = "Option::is_none")]
+    pub accessed_at: Option<u64>,
+    #[serde(rename = "secretExpiresAt")]
+    pub secret_expires_at: u64,
+    #[serde(rename = "retentionUntil")]
+    pub retention_until: u64,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -116,7 +147,10 @@ mod tests {
             metadata: None,
         };
         let json = serde_json::to_string(&req).unwrap();
-        assert_eq!(json, r#"{"encryptedSecret":"abc","expiration":3600,"metadata":null}"#);
+        assert_eq!(
+            json,
+            r#"{"encryptedSecret":"abc","expiration":3600,"metadata":null}"#
+        );
     }
 
     #[test]
@@ -198,6 +232,57 @@ mod tests {
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(!json.contains("metadata"));
+    }
+
+    #[test]
+    fn test_secret_response_includes_receipt_fields() {
+        let resp = SecretResponse {
+            secret_id: "sps-secret".to_string(),
+            receipt_id: "spr-receipt".to_string(),
+            receipt_token: "spt-token".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains(r#""secretId":"sps-secret""#));
+        assert!(json.contains(r#""receiptId":"spr-receipt""#));
+        assert!(json.contains(r#""receiptToken":"spt-token""#));
+    }
+
+    #[test]
+    fn test_receipt_status_request_deserialization() {
+        let json = r#"{"receiptToken":"spt-token"}"#;
+        let req: ReceiptStatusRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.receipt_token, "spt-token");
+    }
+
+    #[test]
+    fn test_receipt_status_response_serialization() {
+        let resp = ReceiptStatusResponse {
+            receipt_id: "spr-receipt".to_string(),
+            status: ReceiptStatus::Accessed,
+            accessed_at: Some(1706900100),
+            secret_expires_at: 1706903600,
+            retention_until: 1706990000,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains(r#""receiptId":"spr-receipt""#));
+        assert!(json.contains(r#""status":"accessed""#));
+        assert!(json.contains(r#""accessedAt":1706900100"#));
+        assert!(json.contains(r#""secretExpiresAt":1706903600"#));
+        assert!(json.contains(r#""retentionUntil":1706990000"#));
+    }
+
+    #[test]
+    fn test_receipt_not_accessed_status_serialization() {
+        let resp = ReceiptStatusResponse {
+            receipt_id: "spr-receipt".to_string(),
+            status: ReceiptStatus::NotAccessed,
+            accessed_at: None,
+            secret_expires_at: 1706903600,
+            retention_until: 1706990000,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains(r#""status":"not_accessed""#));
+        assert!(!json.contains("accessedAt"));
     }
 
     #[test]

@@ -58,6 +58,10 @@ async fn main() {
         .route("/openapi.yaml", get(handlers::openapi))
         .route("/v1/secrets", post(handlers::create_secret))
         .route("/v1/secrets/:id", get(handlers::get_secret))
+        .route(
+            "/v1/receipts/:receipt_id/status",
+            post(handlers::receipt_status),
+        )
         .route("/v1/files", post(handlers::create_file))
         .route("/v1/files/:id", get(handlers::get_file))
         .layer(DefaultBodyLimit::max(body_limit))

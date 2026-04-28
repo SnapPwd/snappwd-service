@@ -2,19 +2,21 @@ use crate::{
     db,
     models::{
         EncryptedSecretResponse, ErrorResponse, FilePeekResponse, FileRequest, FileResponse,
-        GetFileParams, GetSecretParams, SecretPeekResponse, SecretRequest, SecretResponse,
+        GetFileParams, GetSecretParams, ReceiptStatusRequest, SecretPeekResponse, SecretRequest,
+        SecretResponse,
     },
     AppState,
 };
 use axum::{
     extract::{Path, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderValue, StatusCode},
     response::IntoResponse,
     Json,
 };
 
 const MIN_EXPIRATION_SECONDS: u64 = 60;
 const MAX_EXPIRATION_SECONDS: u64 = 2592000; // 30 days
+const RECEIPT_INVALID_ERROR: &str = "Invalid receipt credentials";
 
 const OPENAPI_SPEC: &str = include_str!("../openapi.yaml");
 
@@ -43,7 +45,11 @@ pub async fn create_secret(
     )
     .await
     {
-        Ok(id) => Ok(Json(SecretResponse { secret_id: id })),
+        Ok(created) => Ok(Json(SecretResponse {
+            secret_id: created.secret_id,
+            receipt_id: created.receipt_id,
+            receipt_token: created.receipt_token,
+        })),
         Err(e) => {
             tracing::error!("Redis error: {}", e);
             Err((
@@ -120,6 +126,56 @@ pub async fn get_secret(
                 )
                     .into_response()
             }
+        }
+    }
+}
+
+fn with_no_store(mut response: axum::response::Response) -> axum::response::Response {
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+fn receipt_invalid_response() -> axum::response::Response {
+    with_no_store(
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: RECEIPT_INVALID_ERROR.to_string(),
+            }),
+        )
+            .into_response(),
+    )
+}
+
+fn receipt_server_error_response() -> axum::response::Response {
+    with_no_store(
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Internal server error".to_string(),
+            }),
+        )
+            .into_response(),
+    )
+}
+
+pub async fn receipt_status(
+    State(state): State<AppState>,
+    Path(receipt_id): Path<String>,
+    Json(payload): Json<ReceiptStatusRequest>,
+) -> impl IntoResponse {
+    if !receipt_id.starts_with("spr-") || payload.receipt_token.is_empty() {
+        return receipt_invalid_response();
+    }
+
+    match db::get_receipt_status(&state.redis, &receipt_id, &payload.receipt_token).await {
+        Ok(Some(status)) => with_no_store(Json(status).into_response()),
+        Ok(None) => receipt_invalid_response(),
+        Err(e) => {
+            tracing::error!("Redis error: {}", e);
+            receipt_server_error_response()
         }
     }
 }
@@ -371,5 +427,49 @@ mod tests {
 
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_receipt_status_invalid_id_is_generic_no_store() {
+        let state = dummy_state();
+        let app = Router::new()
+            .route("/api/v1/receipts/:receipt_id/status", post(receipt_status))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/receipts/not-a-receipt/status")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"receiptToken":"spt-token"}"#))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_receipt_status_empty_token_is_generic_no_store() {
+        let state = dummy_state();
+        let app = Router::new()
+            .route("/api/v1/receipts/:receipt_id/status", post(receipt_status))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/receipts/spr-receipt/status")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"receiptToken":""}"#))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
     }
 }

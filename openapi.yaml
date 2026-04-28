@@ -5,6 +5,11 @@ info:
     A secure, ephemeral secret and file sharing service. Data is stored encrypted
     in Redis with automatic expiration and one-time access semantics - secrets and
     files are deleted immediately after retrieval.
+
+    Secret creation also returns reveal receipt credentials. The service stores
+    only a receipt token hash, never the raw receipt token. Receipt records live
+    until the original secret expiration plus a 24 hour retention window, even if
+    the secret is retrieved earlier.
   version: 1.0.0
   contact:
     name: OpenClaw
@@ -17,7 +22,10 @@ paths:
   /v1/secrets:
     post:
       summary: Create a secret
-      description: Store an encrypted secret with time-based expiration
+      description: |
+        Store an encrypted secret with time-based expiration. The response adds
+        `receiptId` and `receiptToken` alongside `secretId`; this is backward
+        compatible for JSON clients that ignore unknown response fields.
       operationId: createSecret
       tags:
         - Secrets
@@ -93,6 +101,77 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/receipts/{receiptId}/status:
+    post:
+      summary: Get reveal receipt status
+      description: |
+        Authenticate with the receipt token returned during secret creation and
+        return whether the secret has been accessed. The token is sent in the
+        request body and is compared against the server-side token hash; raw
+        receipt tokens are not stored.
+
+        Receipt status values are:
+        - `not_accessed`: the secret is still available and has not been retrieved.
+        - `accessed`: the one-time destructive secret retrieval succeeded.
+        - `expired_unavailable`: the secret was not accessed before expiration, or
+          is otherwise unavailable during the receipt retention window.
+
+        Invalid receipt IDs and invalid tokens return the same generic response
+        so token failures do not reveal whether a receipt exists. All responses
+        include `Cache-Control: no-store`.
+      operationId: getReceiptStatus
+      tags:
+        - Receipts
+      parameters:
+        - name: receiptId
+          in: path
+          required: true
+          description: Receipt ID returned by `POST /v1/secrets`
+          schema:
+            type: string
+            pattern: ^spr-[A-Za-z0-9]+$
+            example: spr-2Vj8kN2mPqRs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReceiptStatusRequest'
+      responses:
+        '200':
+          description: Receipt status returned for a valid receipt token
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiptStatusResponse'
+        '404':
+          description: Invalid receipt credentials
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store
           content:
             application/json:
               schema:
@@ -209,14 +288,30 @@ components:
 
     SecretResponse:
       type: object
+      description: |
+        Secret creation response. `receiptId` and `receiptToken` are additive
+        fields; clients that only consume `secretId` remain compatible.
       required:
         - secretId
+        - receiptId
+        - receiptToken
       properties:
         secretId:
           type: string
           description: Unique identifier for retrieving the secret
-          pattern: ^sp-[A-Za-z0-9]+$
-          example: sp-7Yx8kN2mPqRs
+          pattern: ^sps-[A-Za-z0-9]+$
+          example: sps-7Yx8kN2mPqRs
+        receiptId:
+          type: string
+          description: Identifier for querying reveal receipt status
+          pattern: ^spr-[A-Za-z0-9]+$
+          example: spr-2Vj8kN2mPqRs
+        receiptToken:
+          type: string
+          description: |
+            Bearer-style receipt token required by the receipt status endpoint.
+            Returned once at creation time; only its SHA-256 hash is stored.
+          example: spt-4Gm9kP2xQwRt
 
     EncryptedSecretResponse:
       type: object
@@ -249,6 +344,56 @@ components:
           nullable: true
           description: Custom metadata stored with the secret (null for legacy secrets)
           example: {"label": "API key for staging"}
+
+    ReceiptStatusRequest:
+      type: object
+      required:
+        - receiptToken
+      properties:
+        receiptToken:
+          type: string
+          description: Receipt token returned by `POST /v1/secrets`
+          example: spt-4Gm9kP2xQwRt
+
+    ReceiptStatusResponse:
+      type: object
+      required:
+        - receiptId
+        - status
+        - secretExpiresAt
+        - retentionUntil
+      properties:
+        receiptId:
+          type: string
+          description: Receipt identifier
+          pattern: ^spr-[A-Za-z0-9]+$
+          example: spr-2Vj8kN2mPqRs
+        status:
+          type: string
+          enum:
+            - not_accessed
+            - accessed
+            - expired_unavailable
+          description: Current reveal receipt state
+          example: accessed
+        accessedAt:
+          type: integer
+          format: int64
+          nullable: true
+          description: Unix timestamp when destructive retrieval succeeded; omitted otherwise.
+          example: 1706900100
+        secretExpiresAt:
+          type: integer
+          format: int64
+          description: Original Unix expiration time for the secret
+          example: 1706903600
+        retentionUntil:
+          type: integer
+          format: int64
+          description: |
+            Unix timestamp when the receipt record expires. This is the original
+            secret expiration plus 24 hours.
+          example: 1706990000
 
     FileMetadata:
       type: object
@@ -348,5 +493,7 @@ components:
 tags:
   - name: Secrets
     description: One-time secret sharing endpoints
+  - name: Receipts
+    description: Reveal receipt status endpoints
   - name: Files
     description: One-time file sharing endpoints
