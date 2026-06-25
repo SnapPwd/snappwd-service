@@ -10,7 +10,8 @@ This service powers:
 
 ## Architecture
 
-- **Zero-Knowledge Storage**: The service receives *already encrypted* data. It never sees encryption keys or plaintext.
+- **Zero-Knowledge Payload Storage**: The service receives *already encrypted* data. It never sees encryption keys or the plaintext contents of secrets/files.
+  - **Note**: Metadata is *not* encrypted. File `originalFilename` and `contentType`, plus any arbitrary secret `metadata` (e.g. `{"label": "API key for staging"}`), are stored in plaintext in Redis and returned to anyone with the ID via `?peek=true`. Filenames and labels often reveal what a secret is — omit sensitive metadata, or encrypt it client-side before submission.
 - **Ephemeral**: Data is stored in Redis with automatic expiration (TTL).
 - **Stateless**: No persistent database (SQL/NoSQL) is required, just Redis.
 
