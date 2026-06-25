@@ -61,7 +61,7 @@ pub async fn get_secret(
     Path(id): Path<String>,
     Query(params): Query<GetSecretParams>,
 ) -> impl IntoResponse {
-    if !id.starts_with("sp-") && !id.starts_with("sps-") && !id.starts_with("spf-") {
+    if !id.starts_with("sps-") {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Secret not found"})),

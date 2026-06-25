@@ -215,8 +215,8 @@ components:
         secretId:
           type: string
           description: Unique identifier for retrieving the secret
-          pattern: ^sp-[A-Za-z0-9]+$
-          example: sp-7Yx8kN2mPqRs
+          pattern: ^sps-[A-Za-z0-9]+$
+          example: sps-7Yx8kN2mPqRs
 
     EncryptedSecretResponse:
       type: object
