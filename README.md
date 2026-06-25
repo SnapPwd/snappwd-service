@@ -28,6 +28,9 @@ Configuration is handled via environment variables:
 | `PORT` | The HTTP port to listen on. | `3000` |
 | `REDIS_URL` | Connection string for Redis. | `redis://127.0.0.1:6379` |
 | `RUST_LOG` | Log level (e.g., `debug`, `info`). | `info` |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated list of exact origins allowed to call the API from a browser (e.g. `https://app.example.com,https://www.example.com`). Set to `*` to allow any origin (not recommended). | `https://snappwd.io` |
+
+> **CORS:** The default is fail-closed — only the listed origins are allowed; unconfigured origins are denied. Self-hosters serving the web frontend from their own domain must set `CORS_ALLOWED_ORIGINS` to that origin. Note that CORS is a browser-only control: it does not restrict non-browser clients (CLI, `curl`), which this zero-knowledge API accepts by design.
 
 ## Running Locally
 
