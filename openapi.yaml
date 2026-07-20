@@ -35,7 +35,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SecretResponse'
         '400':
-          description: Invalid expiration time (must be between 60 and 2592000 seconds)
+          description: Invalid expiration time or secret metadata
           content:
             application/json:
               schema:
@@ -202,10 +202,56 @@ components:
           description: Time in seconds until the secret expires (1 minute to 30 days)
           example: 3600
         metadata:
-          type: object
           nullable: true
-          description: Optional custom metadata to store with the secret (viewable via peek)
-          example: {"label": "API key for staging"}
+          allOf:
+            - $ref: '#/components/schemas/SecretMetadata'
+          description: |
+            Optional secret metadata. Metadata is not encrypted with the secret value
+            and can be returned by `GET /v1/secrets/{id}?peek=true`.
+          example:
+            label: API key for staging
+            intendedRecipient: ops@example.com
+            rotateBy: "2026-05-01"
+
+    SecretMetadata:
+      type: object
+      additionalProperties: false
+      description: |
+        Optional, unencrypted metadata for a secret. Metadata values must be
+        strings; leading and trailing whitespace is trimmed, and empty values are
+        dropped. Metadata is not encrypted with the secret value and can be
+        returned by `GET /v1/secrets/{id}?peek=true`.
+      properties:
+        label:
+          type: string
+          maxLength: 120
+          description: Short user-facing label. Maximum accepted UTF-8 length is 120 bytes.
+          example: API key for staging
+        intendedRecipient:
+          type: string
+          maxLength: 254
+          description: Recipient hint such as an email address or team name. Maximum accepted UTF-8 length is 254 bytes.
+          example: ops@example.com
+        note:
+          type: string
+          maxLength: 1000
+          description: Optional note about the secret. Maximum accepted UTF-8 length is 1000 bytes.
+          example: Rotate after staging rollout.
+        rotateBy:
+          type: string
+          maxLength: 64
+          description: Optional rotation deadline or date hint. Maximum accepted UTF-8 length is 64 bytes.
+          example: "2026-05-01"
+        rotationReason:
+          type: string
+          maxLength: 240
+          description: Optional reason this secret should be rotated. Maximum accepted UTF-8 length is 240 bytes.
+          example: staging cutover
+        shareType:
+          type: string
+          maxLength: 64
+          description: Optional client-defined share type. Maximum accepted UTF-8 length is 64 bytes.
+          example: password
 
     SecretResponse:
       type: object
@@ -245,10 +291,15 @@ components:
           description: Remaining time-to-live in seconds (-1 if no expiration, -2 if key doesn't exist)
           example: 298
         metadata:
-          type: object
           nullable: true
-          description: Custom metadata stored with the secret (null for legacy secrets)
-          example: {"label": "API key for staging"}
+          allOf:
+            - $ref: '#/components/schemas/SecretMetadata'
+          description: |
+            Secret metadata stored with the secret. Metadata is not encrypted with
+            the secret value and can be returned by peek. Null for legacy secrets;
+            older stored secrets may return legacy metadata shapes.
+          example:
+            label: API key for staging
 
     FileMetadata:
       type: object

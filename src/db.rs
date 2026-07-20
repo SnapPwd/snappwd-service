@@ -1,4 +1,4 @@
-use crate::models::{FileMetadata, StoredFile, StoredSecret};
+use crate::models::{FileMetadata, SecretMetadata, StoredFile, StoredSecret, StoredSecretMetadata};
 use redis::{AsyncCommands, Client};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -23,7 +23,7 @@ pub async fn store_secret(
     client: &Client,
     secret: String,
     expiration: u64,
-    metadata: Option<serde_json::Value>,
+    metadata: Option<SecretMetadata>,
 ) -> Result<String, redis::RedisError> {
     let mut conn = client.get_multiplexed_async_connection().await?;
     let id = format!("sps-{}", generate_short_id());
@@ -31,7 +31,7 @@ pub async fn store_secret(
     let stored = StoredSecret {
         encrypted_secret: secret,
         created_at: current_timestamp(),
-        metadata,
+        metadata: metadata.map(StoredSecretMetadata::Validated),
     };
 
     let json_val = serde_json::to_string(&stored).map_err(|e| {
