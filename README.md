@@ -11,7 +11,7 @@ This service powers:
 ## Architecture
 
 - **Zero-Knowledge Payload Storage**: The service receives *already encrypted* data. It never sees encryption keys or the plaintext contents of secrets/files.
-  - **Note**: Metadata is *not* encrypted. File `originalFilename` and `contentType`, plus any arbitrary secret `metadata` (e.g. `{"label": "API key for staging"}`), are stored in plaintext in Redis and returned to anyone with the ID via `?peek=true`. Filenames and labels often reveal what a secret is — omit sensitive metadata, or encrypt it client-side before submission.
+  - **Note**: Metadata is *not* encrypted. File `originalFilename` and `contentType`, plus supported secret `metadata` (e.g. `{"label": "API key for staging"}`), are stored in plaintext in Redis and returned to anyone with the ID via `?peek=true`. Filenames and labels often reveal what a secret is — omit sensitive metadata, or encrypt it client-side before submission.
 - **Ephemeral**: Data is stored in Redis with automatic expiration (TTL).
 - **Stateless**: No persistent database (SQL/NoSQL) is required, just Redis.
 
@@ -26,15 +26,36 @@ Configuration is handled via environment variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PORT` | The HTTP port to listen on. | `3000` |
+| `PORT` | The HTTP port to listen on. | `8080` |
 | `REDIS_URL` | Connection string for Redis. | `redis://127.0.0.1:6379` |
+| `MAX_FILE_SIZE_MB` | Maximum decoded encrypted file size in MiB (base64 size is checked approximately). | `2` |
 | `RUST_LOG` | Log level (e.g., `debug`, `info`). | `info` |
+
+## Payload and metadata limits
+
+`encryptedSecret` is limited to **1 MiB (1048576 UTF-8 bytes)** after JSON decoding,
+including the ciphertext's encoding/encryption envelope, rather than the original
+plaintext size. Larger values return `400`. The complete `POST /v1/secrets` JSON
+body is limited to **2 MiB (2097152 bytes)** and larger bodies return `413`,
+independently of `MAX_FILE_SIZE_MB`.
+
+Secret metadata accepts only `label`, `intendedRecipient`, `note`, `rotateBy`,
+`rotationReason`, and `shareType`, with respective limits of 120, 254, 1000, 64,
+240, and 64 UTF-8 bytes after trimming. Empty values are dropped. The normalized
+metadata object is additionally limited to **4 KiB (4096 serialized JSON bytes)**,
+including keys and JSON escaping. Invalid metadata returns `422`. These limits
+apply to new submissions; legacy stored metadata remains readable until expiry.
+
+All returned metadata is **untrusted input**. Consumers must use text rendering
+or context-appropriate escaping for labels, notes, file `originalFilename`, and
+other metadata. Never insert them as raw HTML. Size/schema validation does not
+make a string safe to render.
 
 ## Running Locally
 
 1. **Start Redis**:
    ```bash
-   docker run -d -p 6379:6379 redis
+   docker run -d -p 127.0.0.1:6379:6379 redis:7
    ```
 
 2. **Run the Service**:
@@ -46,21 +67,71 @@ Configuration is handled via environment variables:
 
 ## Docker Deployment
 
-A `Dockerfile` is included for containerized deployment.
+A `Dockerfile` is included for containerized deployment. Provision `REDIS_URL`
+through your deployment's secret manager or environment before starting the
+container; the command below passes it through without embedding credentials.
 
 ```bash
 docker build -t snappwd-service .
 docker run -d \
-  -p 8080:3000 \
-  -e REDIS_URL=redis://your-redis-host:6379 \
+  -p 8080:8080 \
+  -e REDIS_URL \
   snappwd-service
 ```
 
+## Redis deployment hardening
+
+The default `redis://127.0.0.1:6379` is a plaintext, unauthenticated local-development
+connection. In production, keep Redis on a private network, restrict ingress to
+the service, and use an authenticated ACL user. Use a URL such as
+`redis://snappwd:<percent-encoded-password>@redis.internal:6379/0`; source the
+real URL from your secret manager. Startup logs do not print `REDIS_URL` because
+it can contain credentials.
+
+Redis TLS support is deferred: this build retains the `tokio-comp` client feature
+and does not support direct `rediss://` connections. Encryption in transit requires
+a separately configured TLS-capable client build or a managed TLS proxy. For that
+future deployment, configure Redis with `port 0`, `tls-port 6379`, server
+certificate/key and CA files, and an authenticated ACL user. Install the issuing
+CA in the client's trust store and keep hostname/certificate verification enabled.
+
+For a dedicated Redis 6.2+ instance (the service uses `GETDEL`), adapt this example
+to your deployment. The ACL file must be provisioned separately
+and readable only by the relevant service account:
+
+```conf
+bind 127.0.0.1 <private-interface-address>
+protected-mode yes
+port 6379
+aclfile /etc/redis/users.acl
+maxmemory 256mb
+maxmemory-policy noeviction
+# Avoid persisting ephemeral ciphertext and plaintext metadata to disk.
+save ""
+appendonly no
+```
+
+Disable the default ACL user and grant the application access only to its key
+prefixes and commands, for example in `users.acl`:
+
+```text
+user default off
+user snappwd on >REPLACE_WITH_A_STRONG_SECRET ~sps-* ~spf-* -@all +setex +get +getdel +ttl +ping
+```
+
+Size `maxmemory` for expected volume and TTLs, with headroom for Redis overhead.
+`noeviction` preserves unexpired shares when memory fills; new writes fail and
+currently return `500`. Monitor memory and write errors, and use a dedicated
+instance so other workloads do not consume this budget. An eviction policy such
+as `volatile-ttl` can reclaim expiring keys but may delete shares before their
+advertised expiration; choose it only if that loss is acceptable. If you enable
+persistence or backups, define access controls and retention for the stored data.
+
 ## API Endpoints
 
-- `POST /v1/secrets`: Store an encrypted secret with time-based expiration.
+- `POST /v1/secrets`: Store an encrypted secret with time-based expiration; returns `200` and an `sps-` ID.
 - `GET /v1/secrets/{id}`: Retrieve a secret. Deletes after retrieval by default. Use `?peek=true` to view metadata without deleting.
-- `POST /v1/files`: Store an encrypted file with metadata and time-based expiration.
+- `POST /v1/files`: Store an encrypted file with metadata and time-based expiration; returns `200` and an `spf-` ID.
 - `GET /v1/files/{id}`: Retrieve a file. Deletes after retrieval by default. Use `?peek=true` to view metadata without deleting.
 
 ## License
