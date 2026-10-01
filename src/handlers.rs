@@ -72,6 +72,7 @@ pub async fn create_secret(
 
     match db::store_secret(
         &state.redis,
+        &state.protection,
         payload.encrypted_secret,
         payload.expiration,
         payload.metadata,
@@ -83,9 +84,9 @@ pub async fn create_secret(
         Err(e) => {
             tracing::error!("Redis error: {}", e);
             Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 Json(ErrorResponse {
-                    error: "Internal server error".to_string(),
+                    error: "Storage unavailable or capacity exceeded".to_string(),
                 }),
             ))
         }
@@ -218,6 +219,7 @@ pub async fn create_file(
 
     match db::store_file(
         &state.redis,
+        &state.protection,
         payload.metadata,
         payload.encrypted_data,
         payload.expiration,
@@ -229,9 +231,9 @@ pub async fn create_file(
         Err(e) => {
             tracing::error!("Redis error: {}", e);
             Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 Json(ErrorResponse {
-                    error: "Internal server error".to_string(),
+                    error: "Storage unavailable or capacity exceeded".to_string(),
                 }),
             ))
         }
@@ -335,6 +337,7 @@ mod tests {
             notifier: None,
             redis: Arc::new(Client::open("redis://127.0.0.1/").unwrap()),
             max_file_size_bytes: 2 * 1024 * 1024,
+            protection: crate::protection::Config::default(),
         }
     }
 
@@ -380,12 +383,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_secret_size_limits() {
-        // Exercise the production router, including its endpoint body limit.
+        // Exercise the production write routes before admission middleware.
         for encrypted_secret in [
             "a".repeat(MAX_SECRET_SIZE_BYTES + 1),
             "é".repeat(MAX_SECRET_SIZE_BYTES / 2 + 1),
         ] {
-            let app = crate::build_app(dummy_state());
+            let app = crate::write_routes().with_state(dummy_state());
             let payload = serde_json::json!({
                 "encryptedSecret": encrypted_secret, "expiration": 3600
             });
@@ -412,7 +415,7 @@ mod tests {
     async fn test_create_secret_at_size_limit_not_rejected() {
         // The largest ciphertext the web app sends must pass both size checks;
         // without Redis the request then fails on storage instead.
-        let app = crate::build_app(dummy_state());
+        let app = crate::write_routes().with_state(dummy_state());
         let payload = serde_json::json!({
             "encryptedSecret": "a".repeat(MAX_SECRET_SIZE_BYTES), "expiration": 3600
         });
@@ -431,7 +434,7 @@ mod tests {
     async fn test_secret_body_limit_with_large_file_setting() {
         let mut state = dummy_state();
         state.max_file_size_bytes = 20 * 1024 * 1024;
-        let app = crate::build_app(state);
+        let app = crate::write_routes().with_state(state);
         let req = Request::builder()
             .method("POST")
             .uri("/v1/secrets")

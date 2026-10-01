@@ -21,12 +21,12 @@ fn current_timestamp() -> u64 {
 
 pub async fn store_secret(
     client: &Client,
+    budget: &crate::protection::Config,
     secret: String,
     expiration: u64,
     metadata: Option<SecretMetadata>,
     sender_email: Option<String>,
 ) -> Result<String, redis::RedisError> {
-    let mut conn = client.get_multiplexed_async_connection().await?;
     let id = format!("sps-{}", generate_short_id());
 
     let stored = StoredSecret {
@@ -44,7 +44,7 @@ pub async fn store_secret(
         ))
     })?;
 
-    let _: () = conn.set_ex(&id, json_val, expiration).await?;
+    crate::protection::store(client, budget, &id, &json_val, expiration).await?;
 
     Ok(id)
 }
@@ -112,12 +112,12 @@ pub async fn peek_secret(
 
 pub async fn store_file(
     client: &Client,
+    budget: &crate::protection::Config,
     metadata: FileMetadata,
     encrypted_data: String,
     expiration: u64,
     sender_email: Option<String>,
 ) -> Result<String, redis::RedisError> {
-    let mut conn = client.get_multiplexed_async_connection().await?;
     let id = format!("spf-{}", generate_short_id());
 
     let stored_file = StoredFile {
@@ -135,7 +135,7 @@ pub async fn store_file(
         ))
     })?;
 
-    let _: () = conn.set_ex(&id, json_val, expiration).await?;
+    crate::protection::store(client, budget, &id, &json_val, expiration).await?;
 
     Ok(id)
 }
