@@ -37,6 +37,7 @@ pub async fn create_secret(
 
     match db::store_secret(
         &state.redis,
+        &state.protection,
         payload.encrypted_secret,
         payload.expiration,
         payload.metadata,
@@ -47,9 +48,9 @@ pub async fn create_secret(
         Err(e) => {
             tracing::error!("Redis error: {}", e);
             Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 Json(ErrorResponse {
-                    error: "Internal server error".to_string(),
+                    error: "Storage unavailable or capacity exceeded".to_string(),
                 }),
             ))
         }
@@ -155,6 +156,7 @@ pub async fn create_file(
 
     match db::store_file(
         &state.redis,
+        &state.protection,
         payload.metadata,
         payload.encrypted_data,
         payload.expiration,
@@ -165,9 +167,9 @@ pub async fn create_file(
         Err(e) => {
             tracing::error!("Redis error: {}", e);
             Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 Json(ErrorResponse {
-                    error: "Internal server error".to_string(),
+                    error: "Storage unavailable or capacity exceeded".to_string(),
                 }),
             ))
         }
@@ -258,6 +260,7 @@ mod tests {
         AppState {
             redis: Arc::new(Client::open("redis://127.0.0.1/").unwrap()),
             max_file_size_bytes: 2 * 1024 * 1024,
+            protection: crate::protection::Config::default(),
         }
     }
 
