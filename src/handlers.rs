@@ -35,11 +35,32 @@ pub async fn create_secret(
         ));
     }
 
+    let sender_email = match crate::notifications::normalize_email(payload.sender_email) {
+        Ok(email) => email,
+        Err(()) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "Invalid notification email".to_string(),
+                }),
+            ))
+        }
+    };
+    if sender_email.is_some() && state.notifier.is_none() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "Email notifications are unavailable".to_string(),
+            }),
+        ));
+    }
+
     match db::store_secret(
         &state.redis,
         payload.encrypted_secret,
         payload.expiration,
         payload.metadata,
+        sender_email,
     )
     .await
     {
@@ -99,10 +120,17 @@ pub async fn get_secret(
     } else {
         // Burn mode: retrieve and delete
         match db::get_secret(&state.redis, &id).await {
-            Ok(Some(secret)) => Json(EncryptedSecretResponse {
-                encrypted_secret: secret,
-            })
-            .into_response(),
+            Ok(Some(secret)) => {
+                if let (Some(email), Some(notifier)) = (&secret.sender_email, &state.notifier) {
+                    if notifier.send(email, &id).await.is_err() {
+                        tracing::warn!("Reveal notification delivery failed");
+                    }
+                }
+                Json(EncryptedSecretResponse {
+                    encrypted_secret: secret.encrypted_secret,
+                })
+                .into_response()
+            }
             Ok(None) => (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
@@ -256,6 +284,7 @@ mod tests {
     // Helper to create a dummy state
     fn dummy_state() -> AppState {
         AppState {
+            notifier: None,
             redis: Arc::new(Client::open("redis://127.0.0.1/").unwrap()),
             max_file_size_bytes: 2 * 1024 * 1024,
         }

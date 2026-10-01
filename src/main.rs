@@ -12,9 +12,11 @@ use tower_http::trace::TraceLayer;
 mod db;
 mod handlers;
 mod models;
+mod notifications;
 
 #[derive(Clone)]
 pub struct AppState {
+    pub notifier: Option<Arc<notifications::Notifier>>,
     pub redis: Arc<Client>,
     pub max_file_size_bytes: usize,
 }
@@ -44,7 +46,11 @@ async fn main() {
         }
     };
 
+    let notifier = notifications::Notifier::from_env()
+        .expect("Invalid SMTP configuration")
+        .map(Arc::new);
     let state = AppState {
+        notifier,
         redis: client,
         max_file_size_bytes,
     };
@@ -71,3 +77,6 @@ async fn main() {
     tracing::info!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, app).await.unwrap();
 }
+
+#[cfg(test)]
+mod notification_tests;

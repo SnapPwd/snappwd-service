@@ -180,6 +180,12 @@ where
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct SecretRequest {
+    #[serde(
+        rename = "senderEmail",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sender_email: Option<String>,
     #[serde(rename = "encryptedSecret")]
     pub encrypted_secret: String,
     pub expiration: u64,
@@ -190,6 +196,12 @@ pub struct SecretRequest {
 /// Internal storage format for secrets (JSON in Redis)
 #[derive(Deserialize, Serialize, Debug)]
 pub struct StoredSecret {
+    #[serde(
+        rename = "senderEmail",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sender_email: Option<String>,
     #[serde(rename = "encryptedSecret")]
     pub encrypted_secret: String,
     #[serde(rename = "createdAt")]
@@ -289,6 +301,7 @@ mod tests {
     #[test]
     fn test_secret_request_serialization() {
         let req = SecretRequest {
+            sender_email: None,
             encrypted_secret: "abc".to_string(),
             expiration: 3600,
             metadata: None,
@@ -303,6 +316,7 @@ mod tests {
     #[test]
     fn test_secret_request_serialization_with_metadata() {
         let req = SecretRequest {
+            sender_email: None,
             encrypted_secret: "abc".to_string(),
             expiration: 3600,
             metadata: Some(SecretMetadata {
@@ -405,6 +419,7 @@ mod tests {
     #[test]
     fn test_stored_secret_serialization() {
         let stored = StoredSecret {
+            sender_email: None,
             encrypted_secret: "secret123".to_string(),
             created_at: 1706900000,
             metadata: Some(StoredSecretMetadata::Validated(SecretMetadata {

@@ -40,6 +40,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Invalid JSON field type or request shape
+        '503':
+          description: Sender notification requested but SMTP is not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
           content:
@@ -201,6 +209,17 @@ components:
           maximum: 2592000
           description: Time in seconds until the secret expires (1 minute to 30 days)
           example: 3600
+        senderEmail:
+          type: string
+          format: email
+          maxLength: 254
+          nullable: true
+          description: |
+            Optional single bare ASCII address for a best-effort notification after
+            one-time retrieval. Trimmed; blank/null/omitted disables notifications.
+            Stored privately until retrieval or expiration, never returned by peek.
+            Requires configured SMTP; otherwise creation returns 503.
+          example: sender@example.com
         metadata:
           nullable: true
           allOf:

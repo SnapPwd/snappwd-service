@@ -24,11 +24,13 @@ pub async fn store_secret(
     secret: String,
     expiration: u64,
     metadata: Option<SecretMetadata>,
+    sender_email: Option<String>,
 ) -> Result<String, redis::RedisError> {
     let mut conn = client.get_multiplexed_async_connection().await?;
     let id = format!("sps-{}", generate_short_id());
 
     let stored = StoredSecret {
+        sender_email,
         encrypted_secret: secret,
         created_at: current_timestamp(),
         metadata: metadata.map(StoredSecretMetadata::Validated),
@@ -47,7 +49,10 @@ pub async fn store_secret(
     Ok(id)
 }
 
-pub async fn get_secret(client: &Client, id: &str) -> Result<Option<String>, redis::RedisError> {
+pub async fn get_secret(
+    client: &Client,
+    id: &str,
+) -> Result<Option<StoredSecret>, redis::RedisError> {
     let mut conn = client.get_multiplexed_async_connection().await?;
 
     let result: Option<String> = redis::cmd("GETDEL").arg(id).query_async(&mut conn).await?;
@@ -56,10 +61,15 @@ pub async fn get_secret(client: &Client, id: &str) -> Result<Option<String>, red
         Some(json_str) => {
             // Try to parse as StoredSecret (new format)
             if let Ok(stored) = serde_json::from_str::<StoredSecret>(&json_str) {
-                Ok(Some(stored.encrypted_secret))
+                Ok(Some(stored))
             } else {
                 // Legacy format: plain string
-                Ok(Some(json_str))
+                Ok(Some(StoredSecret {
+                    encrypted_secret: json_str,
+                    created_at: 0,
+                    metadata: None,
+                    sender_email: None,
+                }))
             }
         }
         None => Ok(None),
@@ -88,6 +98,7 @@ pub async fn peek_secret(
             } else {
                 // Legacy format: plain string - create a synthetic StoredSecret
                 let legacy_stored = StoredSecret {
+                    sender_email: None,
                     encrypted_secret: json_str,
                     created_at: 0,
                     metadata: None,

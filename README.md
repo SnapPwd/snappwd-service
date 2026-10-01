@@ -17,8 +17,8 @@ This service powers:
 
 ## Prerequisites
 
-- **Redis**: A running Redis instance (version 6+ recommended).
-- **Rust**: 1.70+ (if building from source).
+- **Redis**: A running Redis instance (version 6.2+ required for atomic GETDEL).
+- **Rust**: 1.85+ (if building from source).
 
 ## Configuration
 
@@ -66,3 +66,38 @@ docker run -d \
 ## License
 
 MIT
+
+## Sender reveal notifications
+
+`POST /v1/secrets` accepts optional `senderEmail`, a single bare ASCII email
+address (maximum 254 bytes). Whitespace is trimmed; blank/null/omitted values
+opt out. Invalid addresses return 400; non-string values return 422.
+If notifications are unconfigured, requests with an address return 503 before
+storage; requests without one keep working.
+
+Configure `SMTP_HOST`, `SMTP_FROM`, and optionally `SMTP_PORT` (default 587).
+Authentication uses `SMTP_USERNAME` and `SMTP_PASSWORD` together. STARTTLS is
+required and server certificates are verified. Partial/invalid configuration
+fails startup. Keep credentials in deployment secrets. No production setup or
+migration is applied by this change; deploy the service and configure SMTP before
+enabling an email field in clients.
+
+The address is stored privately in the same Redis record and expires/deletes
+with the secret. It is excluded from create, peek, and reveal responses. Only the
+winner of atomic GETDEL sends a notification; peek, expiration, repeat access,
+and legacy records without an address never send mail. The email contains the
+secret ID, never ciphertext, keys, metadata, or a reveal link. It confirms API
+retrieval, since successful browser decryption is invisible to this service.
+
+Delivery is a single best-effort attempt awaited for at most five seconds.
+Failures are logged without addresses or SMTP error details and do not prevent
+returning the encrypted secret. There is no retry/outbox: crashes after deletion
+or SMTP failures can lose the notification. SMTP acceptance does not guarantee
+inbox delivery.
+
+Run `cargo test` for unit tests. Run the real Redis + local SMTP sink integration
+suite with a dedicated Redis 6.2+ instance:
+
+```sh
+TEST_REDIS_URL=redis://127.0.0.1:6379 cargo test notification_lifecycle -- --ignored
+```
