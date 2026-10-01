@@ -1,5 +1,5 @@
 # Use a multi-stage build for small final image
-FROM rust:1.84-slim-bookworm as builder
+FROM rust:1.85-slim-bookworm as builder
 
 WORKDIR /usr/src/app
 COPY . .
