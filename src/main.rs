@@ -35,7 +35,7 @@ async fn main() {
         .unwrap_or(2);
     let max_file_size_bytes = max_file_size_mb * 1024 * 1024;
 
-    tracing::info!("Connecting to Redis at {}", redis_url);
+    tracing::info!("Initializing Redis client");
     tracing::info!("Max file size configured to {} MB", max_file_size_mb);
 
     let client = match db::get_redis_client(&redis_url).await {
