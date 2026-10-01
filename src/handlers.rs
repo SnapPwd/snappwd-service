@@ -1,8 +1,9 @@
 use crate::{
     db,
     models::{
-        EncryptedSecretResponse, ErrorResponse, FilePeekResponse, FileRequest, FileResponse,
-        GetFileParams, GetSecretParams, SecretPeekResponse, SecretRequest, SecretResponse,
+        EncryptedFileResponse, EncryptedSecretResponse, ErrorResponse, FilePeekResponse,
+        FileRequest, FileResponse, GetFileParams, GetSecretParams, SecretPeekResponse,
+        SecretRequest, SecretResponse,
     },
     AppState,
 };
@@ -181,11 +182,32 @@ pub async fn create_file(
         ));
     }
 
+    let sender_email = match crate::notifications::normalize_email(payload.sender_email) {
+        Ok(email) => email,
+        Err(()) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "Invalid notification email".to_string(),
+                }),
+            ))
+        }
+    };
+    if sender_email.is_some() && state.notifier.is_none() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "Email notifications are unavailable".to_string(),
+            }),
+        ));
+    }
+
     match db::store_file(
         &state.redis,
         payload.metadata,
         payload.encrypted_data,
         payload.expiration,
+        sender_email,
     )
     .await
     {
@@ -245,7 +267,19 @@ pub async fn get_file(
     } else {
         // Burn mode: retrieve and delete
         match db::get_file(&state.redis, &id).await {
-            Ok(Some(file)) => Json(file).into_response(),
+            Ok(Some(file)) => {
+                if let (Some(email), Some(notifier)) = (&file.sender_email, &state.notifier) {
+                    if notifier.send(email, &id).await.is_err() {
+                        tracing::warn!("File reveal notification delivery failed");
+                    }
+                }
+                Json(EncryptedFileResponse {
+                    metadata: file.metadata,
+                    encrypted_data: file.encrypted_data,
+                    created_at: file.created_at,
+                })
+                .into_response()
+            }
             Ok(None) => (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {

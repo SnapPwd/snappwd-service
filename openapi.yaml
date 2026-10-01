@@ -132,6 +132,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Invalid JSON field type or request shape
+        '503':
+          description: Sender notification requested but SMTP is not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
           content:
@@ -347,6 +355,16 @@ components:
         - encryptedData
         - expiration
       properties:
+        senderEmail:
+          type: string
+          format: email
+          maxLength: 254
+          nullable: true
+          description: |
+            Optional private notification address, with the same validation and
+            best-effort delivery semantics as SecretRequest.senderEmail.
+            Expires with the file; never returned in peek or retrieval responses.
+            Requires configured SMTP; otherwise creation returns 503.
         metadata:
           $ref: '#/components/schemas/FileMetadata'
         encryptedData:

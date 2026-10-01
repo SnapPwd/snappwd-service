@@ -69,7 +69,7 @@ MIT
 
 ## Sender reveal notifications
 
-`POST /v1/secrets` accepts optional `senderEmail`, a single bare ASCII email
+`POST /v1/secrets` and `POST /v1/files` accept optional `senderEmail`, a single bare ASCII email
 address (maximum 254 bytes). Whitespace is trimmed; blank/null/omitted values
 opt out. Invalid addresses return 400; non-string values return 422.
 If notifications are unconfigured, requests with an address return 503 before
@@ -83,10 +83,10 @@ migration is applied by this change; deploy the service and configure SMTP befor
 enabling an email field in clients.
 
 The address is stored privately in the same Redis record and expires/deletes
-with the secret. It is excluded from create, peek, and reveal responses. Only the
+with the secret or file. It is excluded from create, peek, and reveal responses. Only the
 winner of atomic GETDEL sends a notification; peek, expiration, repeat access,
 and legacy records without an address never send mail. The email contains the
-secret ID, never ciphertext, keys, metadata, or a reveal link. It confirms API
+secret/file ID, never ciphertext, keys, metadata, or a reveal link. It confirms API
 retrieval, since successful browser decryption is invisible to this service.
 
 Delivery is a single best-effort attempt awaited for at most five seconds.
@@ -101,3 +101,7 @@ suite with a dedicated Redis 6.2+ instance:
 ```sh
 TEST_REDIS_URL=redis://127.0.0.1:6379 cargo test notification_lifecycle -- --ignored
 ```
+
+File notifications use the same SMTP configuration and failure semantics. File
+retrieval responses preserve metadata, encryptedData and createdAt, while the
+private senderEmail is never serialized into a public response.
