@@ -115,11 +115,13 @@ pub async fn store_file(
     metadata: FileMetadata,
     encrypted_data: String,
     expiration: u64,
+    sender_email: Option<String>,
 ) -> Result<String, redis::RedisError> {
     let mut conn = client.get_multiplexed_async_connection().await?;
     let id = format!("spf-{}", generate_short_id());
 
     let stored_file = StoredFile {
+        sender_email,
         metadata,
         encrypted_data,
         created_at: current_timestamp(),

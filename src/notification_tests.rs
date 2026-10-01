@@ -44,6 +44,8 @@ fn app(redis: Arc<redis::Client>, notifier: Option<Arc<Notifier>>) -> Router {
     Router::new()
         .route("/v1/secrets", post(handlers::create_secret))
         .route("/v1/secrets/:id", get(handlers::get_secret))
+        .route("/v1/files", post(handlers::create_file))
+        .route("/v1/files/:id", get(handlers::get_file))
         .with_state(AppState {
             redis,
             notifier,
@@ -54,6 +56,28 @@ fn app(redis: Arc<redis::Client>, notifier: Option<Arc<Notifier>>) -> Router {
 #[tokio::test]
 #[ignore = "Requires dedicated Redis 6.2+ via TEST_REDIS_URL"]
 async fn notification_lifecycle() {
+    lifecycle(false).await;
+}
+
+#[tokio::test]
+#[ignore = "Requires dedicated Redis 6.2+ via TEST_REDIS_URL"]
+async fn file_notification_lifecycle() {
+    lifecycle(true).await;
+}
+
+async fn lifecycle(is_file: bool) {
+    let endpoint = if is_file { "/v1/files" } else { "/v1/secrets" };
+    let id_field = if is_file { "fileId" } else { "secretId" };
+    let prefix = if is_file { "spf" } else { "sps" };
+    let metadata = serde_json::json!({"originalFilename":"private.txt", "contentType":"text/plain", "iv":"private-iv"});
+    let expected = |value: &serde_json::Value| {
+        if is_file {
+            assert!(value["createdAt"].as_u64().is_some());
+            serde_json::json!({"metadata":metadata,"encryptedData":"ciphertext", "createdAt":value["createdAt"]})
+        } else {
+            serde_json::json!({"encryptedSecret":"ciphertext"})
+        }
+    };
     let redis = Arc::new(
         redis::Client::open(std::env::var("TEST_REDIS_URL").expect("TEST_REDIS_URL")).unwrap(),
     );
@@ -98,11 +122,15 @@ async fn notification_lifecycle() {
         }
     });
     let app = app(redis.clone(), Some(Arc::new(Notifier::local(port))));
-    let payload = serde_json::json!({"encryptedSecret":"ciphertext", "expiration":60, "senderEmail":" sender@example.com "});
-    let (status, created) = request(&app, "POST", "/v1/secrets", payload.clone()).await;
+    let payload = if is_file {
+        serde_json::json!({"metadata":metadata,"encryptedData":"ciphertext", "expiration":60, "senderEmail":" sender@example.com "})
+    } else {
+        serde_json::json!({"encryptedSecret":"ciphertext", "expiration":60, "senderEmail":" sender@example.com "})
+    };
+    let (status, created) = request(&app, "POST", endpoint, payload.clone()).await;
     assert_eq!(status, StatusCode::OK);
     assert!(created.get("senderEmail").is_none());
-    let id = created["secretId"].as_str().unwrap();
+    let id = created[id_field].as_str().unwrap();
     let stored: String = conn.get(id).await.unwrap();
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&stored).unwrap()["senderEmail"],
@@ -113,14 +141,14 @@ async fn notification_lifecycle() {
     let (status, peek) = request(
         &app,
         "GET",
-        &format!("/v1/secrets/{id}?peek=true"),
+        &format!("{endpoint}/{id}?peek=true"),
         serde_json::Value::Null,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(peek.get("senderEmail").is_none());
     assert!(received.try_recv().is_err());
-    let uri = format!("/v1/secrets/{id}");
+    let uri = format!("{endpoint}/{id}");
     let (first, second) = tokio::join!(
         request(&app, "GET", &uri, serde_json::Value::Null),
         request(&app, "GET", &uri, serde_json::Value::Null)
@@ -130,18 +158,20 @@ async fn notification_lifecycle() {
     } else {
         (second, first)
     };
-    assert_eq!(
-        winner,
-        (
-            StatusCode::OK,
-            serde_json::json!({"encryptedSecret":"ciphertext"})
-        )
-    );
+    assert_eq!(winner.0, StatusCode::OK);
+    assert_eq!(winner.1, expected(&winner.1));
     assert_eq!(loser.0, StatusCode::NOT_FOUND);
     let mail = received.try_recv().unwrap();
     assert!(mail.contains("To: sender@example.com"));
     assert!(mail.contains(id));
     assert!(!mail.contains("ciphertext"));
+    assert!(!mail.contains("private.txt"));
+    assert!(!mail.contains("private-iv"));
+    assert!(mail.contains(if is_file {
+        "file was accessed"
+    } else {
+        "secret was accessed"
+    }));
     assert!(!conn.exists::<_, bool>(id).await.unwrap());
     assert_eq!(
         request(&app, "GET", &uri, serde_json::Value::Null).await.0,
@@ -150,14 +180,14 @@ async fn notification_lifecycle() {
     assert!(received.try_recv().is_err());
 
     // Redis controls expiration; advance it without waiting for wall time.
-    let (_, created) = request(&app, "POST", "/v1/secrets", payload.clone()).await;
-    let id = created["secretId"].as_str().unwrap();
+    let (_, created) = request(&app, "POST", endpoint, payload.clone()).await;
+    let id = created[id_field].as_str().unwrap();
     let _: bool = conn.expire(id, 0).await.unwrap();
     assert_eq!(
         request(
             &app,
             "GET",
-            &format!("/v1/secrets/{id}"),
+            &format!("{endpoint}/{id}"),
             serde_json::Value::Null
         )
         .await
@@ -167,20 +197,24 @@ async fn notification_lifecycle() {
     assert!(received.try_recv().is_err());
 
     // Omitted and blank addresses remain fully compatible.
-    for email in [serde_json::Value::Null, serde_json::json!(" ")] {
-        let (_, created) = request(
-            &app,
-            "POST",
-            "/v1/secrets",
-            serde_json::json!({"encryptedSecret":"no-mail", "expiration":60, "senderEmail":email}),
-        )
-        .await;
-        let id = created["secretId"].as_str().unwrap();
+    for email in [
+        None,
+        Some(serde_json::Value::Null),
+        Some(serde_json::json!(" ")),
+    ] {
+        let mut optional = payload.clone();
+        if let Some(email) = email {
+            optional["senderEmail"] = email;
+        } else {
+            optional.as_object_mut().unwrap().remove("senderEmail");
+        }
+        let (_, created) = request(&app, "POST", endpoint, optional).await;
+        let id = created[id_field].as_str().unwrap();
         assert_eq!(
             request(
                 &app,
                 "GET",
-                &format!("/v1/secrets/{id}"),
+                &format!("{endpoint}/{id}"),
                 serde_json::Value::Null
             )
             .await
@@ -188,17 +222,22 @@ async fn notification_lifecycle() {
             StatusCode::OK
         );
     }
-    for value in [
-        "legacy-ciphertext",
-        r#"{"encryptedSecret":"old-json","createdAt":1,"metadata":null}"#,
-    ] {
-        let id = format!("sps-{}", uuid::Uuid::new_v4());
+    let legacy = if is_file {
+        vec![serde_json::json!({"metadata":metadata,"encryptedData":"ciphertext"}).to_string()]
+    } else {
+        vec![
+            "legacy-ciphertext".to_string(),
+            r#"{"encryptedSecret":"old-json","createdAt":1,"metadata":null}"#.to_string(),
+        ]
+    };
+    for value in legacy {
+        let id = format!("{prefix}-{}", uuid::Uuid::new_v4());
         let _: () = conn.set_ex(&id, value, 60).await.unwrap();
         assert_eq!(
             request(
                 &app,
                 "GET",
-                &format!("/v1/secrets/{id}"),
+                &format!("{endpoint}/{id}"),
                 serde_json::Value::Null
             )
             .await
@@ -215,45 +254,57 @@ async fn notification_lifecycle() {
     let port = closed.local_addr().unwrap().port();
     drop(closed);
     let failing = self::app(redis.clone(), Some(Arc::new(Notifier::local(port))));
-    let (_, created) = request(&failing, "POST", "/v1/secrets", payload.clone()).await;
-    let id = created["secretId"].as_str().unwrap();
-    assert_eq!(
-        request(
-            &failing,
-            "GET",
-            &format!("/v1/secrets/{id}"),
-            serde_json::Value::Null
-        )
-        .await,
-        (
-            StatusCode::OK,
-            serde_json::json!({"encryptedSecret":"ciphertext"})
-        )
-    );
+    let (_, created) = request(&failing, "POST", endpoint, payload.clone()).await;
+    let id = created[id_field].as_str().unwrap();
+    let revealed = request(
+        &failing,
+        "GET",
+        &format!("{endpoint}/{id}"),
+        serde_json::Value::Null,
+    )
+    .await;
+    assert_eq!(revealed.0, StatusCode::OK);
+    assert_eq!(revealed.1, expected(&revealed.1));
     assert!(!conn.exists::<_, bool>(id).await.unwrap());
     let disabled = self::app(redis, None);
-    assert_eq!(
-        request(&disabled, "POST", "/v1/secrets", payload).await.0,
-        StatusCode::SERVICE_UNAVAILABLE
-    );
+    let mut omitted = payload.clone();
+    omitted.as_object_mut().unwrap().remove("senderEmail");
+    let (status, created) = request(&disabled, "POST", endpoint, omitted).await;
+    assert_eq!(status, StatusCode::OK);
+    let id = created[id_field].as_str().unwrap();
     assert_eq!(
         request(
             &disabled,
-            "POST",
-            "/v1/secrets",
-            serde_json::json!({"encryptedSecret":"test", "expiration":60, "senderEmail":"invalid"})
+            "GET",
+            &format!("{endpoint}/{id}"),
+            serde_json::Value::Null
         )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&disabled, "POST", endpoint, payload.clone())
+            .await
+            .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        request(&disabled, "POST", endpoint, {
+            let mut invalid = payload.clone();
+            invalid["senderEmail"] = serde_json::json!("invalid");
+            invalid
+        })
         .await
         .0,
         StatusCode::BAD_REQUEST
     );
     assert_eq!(
-        request(
-            &disabled,
-            "POST",
-            "/v1/secrets",
-            serde_json::json!({"encryptedSecret":"test", "expiration":60, "senderEmail":123})
-        )
+        request(&disabled, "POST", endpoint, {
+            let mut invalid = payload.clone();
+            invalid["senderEmail"] = serde_json::json!(123);
+            invalid
+        })
         .await
         .0,
         StatusCode::UNPROCESSABLE_ENTITY

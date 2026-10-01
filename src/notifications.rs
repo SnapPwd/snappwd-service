@@ -66,11 +66,16 @@ impl Notifier {
         }))
     }
 
-    fn message(&self, recipient: &str, secret_id: &str) -> Result<Message, ()> {
+    fn message(&self, recipient: &str, resource_id: &str) -> Result<Message, ()> {
+        let kind = if resource_id.starts_with("spf-") {
+            "file"
+        } else {
+            "secret"
+        };
         Message::builder().from(self.from.clone())
             .to(recipient.parse().map_err(|_| ())?)
-            .subject("Your SnapPwd secret was accessed")
-            .body(format!("Your SnapPwd secret ({secret_id}) was accessed and deleted.\n\nThe encrypted content was retrieved; SnapPwd cannot verify client-side decryption.\n"))
+            .subject(format!("Your SnapPwd {kind} was accessed"))
+            .body(format!("Your SnapPwd {kind} ({resource_id}) was accessed and deleted.\n\nThe encrypted content was retrieved; SnapPwd cannot verify client-side decryption.\n"))
             .map_err(|_| ())
     }
 

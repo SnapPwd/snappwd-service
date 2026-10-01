@@ -251,6 +251,12 @@ pub struct FileMetadata {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct FileRequest {
+    #[serde(
+        rename = "senderEmail",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sender_email: Option<String>,
     pub metadata: FileMetadata,
     #[serde(rename = "encryptedData")]
     pub encrypted_data: String, // Base64
@@ -265,10 +271,26 @@ pub struct FileResponse {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct StoredFile {
+    #[serde(
+        rename = "senderEmail",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sender_email: Option<String>,
     pub metadata: FileMetadata,
     #[serde(rename = "encryptedData")]
     pub encrypted_data: String,
     #[serde(rename = "createdAt", default)]
+    pub created_at: u64,
+}
+
+/// Public reveal response deliberately excludes private notification metadata.
+#[derive(Serialize, Debug)]
+pub struct EncryptedFileResponse {
+    pub metadata: FileMetadata,
+    #[serde(rename = "encryptedData")]
+    pub encrypted_data: String,
+    #[serde(rename = "createdAt")]
     pub created_at: u64,
 }
 
@@ -486,6 +508,7 @@ mod tests {
     #[test]
     fn test_file_request_serialization() {
         let req = FileRequest {
+            sender_email: None,
             metadata: FileMetadata {
                 original_filename: "test.txt".to_string(),
                 content_type: "text/plain".to_string(),
@@ -534,6 +557,7 @@ mod tests {
     #[test]
     fn test_stored_file_with_created_at() {
         let stored = StoredFile {
+            sender_email: None,
             metadata: FileMetadata {
                 original_filename: "doc.txt".to_string(),
                 content_type: "text/plain".to_string(),
