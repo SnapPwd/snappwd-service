@@ -35,7 +35,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SecretResponse'
         '400':
-          description: Invalid expiration time or secret metadata
+          description: Invalid expiration time, notification email, or encrypted secret exceeds 1048576 UTF-8 bytes
           content:
             application/json:
               schema:
@@ -54,6 +54,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: JSON request body exceeds 2097152 bytes (2 MiB)
 
   /v1/secrets/{id}:
     get:
@@ -208,7 +210,11 @@ components:
       properties:
         encryptedSecret:
           type: string
-          description: The encrypted secret data
+          maxLength: 1048576
+          description: |
+            The encrypted secret data. Maximum UTF-8 size after JSON decoding is
+            1048576 bytes (1 MiB), including any base64/encryption envelope.
+            The complete JSON request body is limited to 2097152 bytes (2 MiB).
           example: "U2FsdGVkX1+vupppZksvRf5pq5g5XjFRlipGLw=="
         expiration:
           type: integer

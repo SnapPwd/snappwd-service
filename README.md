@@ -28,7 +28,16 @@ Configuration is handled via environment variables:
 |----------|-------------|---------|
 | `PORT` | The HTTP port to listen on. | `3000` |
 | `REDIS_URL` | Connection string for Redis. | `redis://127.0.0.1:6379` |
+| `MAX_FILE_SIZE_MB` | Maximum decoded encrypted file size in MiB (base64 size is checked approximately). | `2` |
 | `RUST_LOG` | Log level (e.g., `debug`, `info`). | `info` |
+
+## Secret payload limits
+
+`encryptedSecret` is limited to **1 MiB (1048576 UTF-8 bytes)** after JSON decoding,
+including the ciphertext's encoding/encryption envelope, rather than the original
+plaintext size. Larger values return `400`. The complete `POST /v1/secrets` JSON
+body is limited to **2 MiB (2097152 bytes)** and larger bodies return `413`,
+independently of `MAX_FILE_SIZE_MB`.
 
 ## Running Locally
 
