@@ -41,7 +41,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: Invalid JSON field type or request shape
+          description: Invalid JSON field type, request shape, or secret metadata (including the 4096-byte serialized metadata cap)
         '503':
           description: Sender notification requested but SMTP is not configured
           content:
@@ -247,7 +247,10 @@ components:
         Optional, unencrypted metadata for a secret. Metadata values must be
         strings; leading and trailing whitespace is trimmed, and empty values are
         dropped. Metadata is not encrypted with the secret value and can be
-        returned by `GET /v1/secrets/{id}?peek=true`.
+        returned by `GET /v1/secrets/{id}?peek=true`. After normalization, the
+        complete serialized metadata object must be at most 4096 bytes (4 KiB),
+        including JSON keys and escaping. Consumers must escape metadata for the
+        rendering context; these strings are untrusted input, not safe HTML.
       properties:
         label:
           type: string
@@ -337,7 +340,7 @@ components:
       properties:
         originalFilename:
           type: string
-          description: Original filename
+          description: Untrusted original filename. Consumers must escape it for the rendering context.
           example: document.pdf
         contentType:
           type: string
