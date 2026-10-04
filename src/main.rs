@@ -35,13 +35,14 @@ async fn main() {
         .unwrap_or(2);
     let max_file_size_bytes = max_file_size_mb * 1024 * 1024;
 
+    // Redis URLs may contain credentials; never include them in logs.
     tracing::info!("Initializing Redis client");
     tracing::info!("Max file size configured to {} MB", max_file_size_mb);
 
     let client = match db::get_redis_client(&redis_url).await {
         Ok(c) => Arc::new(c),
         Err(e) => {
-            tracing::error!("Failed to connect to Redis: {}", e);
+            tracing::error!(error_kind = ?e.kind(), "Failed to initialize Redis client");
             return;
         }
     };
