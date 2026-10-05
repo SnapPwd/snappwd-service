@@ -58,9 +58,9 @@ docker run -d \
 
 ## API Endpoints
 
-- `POST /v1/secrets`: Store an encrypted secret with time-based expiration.
+- `POST /v1/secrets`: Store an encrypted secret with time-based expiration; returns `200` and an `sps-` ID.
 - `GET /v1/secrets/{id}`: Retrieve a secret. Deletes after retrieval by default. Use `?peek=true` to view metadata without deleting.
-- `POST /v1/files`: Store an encrypted file with metadata and time-based expiration.
+- `POST /v1/files`: Store an encrypted file with metadata and time-based expiration; returns `200` and an `spf-` ID.
 - `GET /v1/files/{id}`: Retrieve a file. Deletes after retrieval by default. Use `?peek=true` to view metadata without deleting.
 
 ## License
