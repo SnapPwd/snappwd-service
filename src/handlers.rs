@@ -14,6 +14,11 @@ use axum::{
     Json,
 };
 
+// 1.5 MiB: matches the web app's bound on the base64-encoded ciphertext of a
+// 1 MiB plaintext secret.
+pub const MAX_SECRET_SIZE_BYTES: usize = 1024 * 1024 * 3 / 2;
+pub const MAX_SECRET_BODY_BYTES: usize = 2 * 1024 * 1024;
+
 const MIN_EXPIRATION_SECONDS: u64 = 60;
 const MAX_EXPIRATION_SECONDS: u64 = 2592000; // 30 days
 
@@ -32,6 +37,15 @@ pub async fn create_secret(
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid expiration time".to_string(),
+            }),
+        ));
+    }
+
+    if payload.encrypted_secret.len() > MAX_SECRET_SIZE_BYTES {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!("Secret too large (max {MAX_SECRET_SIZE_BYTES} UTF-8 bytes)"),
             }),
         ));
     }
@@ -362,6 +376,70 @@ mod tests {
         let response = app.oneshot(req).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_secret_size_limits() {
+        // Exercise the production router, including its endpoint body limit.
+        for encrypted_secret in [
+            "a".repeat(MAX_SECRET_SIZE_BYTES + 1),
+            "é".repeat(MAX_SECRET_SIZE_BYTES / 2 + 1),
+        ] {
+            let app = crate::build_app(dummy_state());
+            let payload = serde_json::json!({
+                "encryptedSecret": encrypted_secret, "expiration": 3600
+            });
+            let req = Request::builder()
+                .method("POST")
+                .uri("/v1/secrets")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap();
+            let response = app.oneshot(req).await.unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let body = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert!(error["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("Secret too large"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_secret_at_size_limit_not_rejected() {
+        // The largest ciphertext the web app sends must pass both size checks;
+        // without Redis the request then fails on storage instead.
+        let app = crate::build_app(dummy_state());
+        let payload = serde_json::json!({
+            "encryptedSecret": "a".repeat(MAX_SECRET_SIZE_BYTES), "expiration": 3600
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/secrets")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_ne!(response.status(), StatusCode::BAD_REQUEST);
+        assert_ne!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn test_secret_body_limit_with_large_file_setting() {
+        let mut state = dummy_state();
+        state.max_file_size_bytes = 20 * 1024 * 1024;
+        let app = crate::build_app(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/secrets")
+            .header("content-type", "application/json")
+            .body(Body::from(" ".repeat(MAX_SECRET_BODY_BYTES + 1)))
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]
