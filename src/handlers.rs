@@ -14,6 +14,11 @@ use axum::{
     Json,
 };
 
+// 1.5 MiB: matches the web app's bound on the base64-encoded ciphertext of a
+// 1 MiB plaintext secret.
+pub const MAX_SECRET_SIZE_BYTES: usize = 1024 * 1024 * 3 / 2;
+pub const MAX_SECRET_BODY_BYTES: usize = 2 * 1024 * 1024;
+
 const MIN_EXPIRATION_SECONDS: u64 = 60;
 const MAX_EXPIRATION_SECONDS: u64 = 2592000; // 30 days
 
@@ -32,6 +37,15 @@ pub async fn create_secret(
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Invalid expiration time".to_string(),
+            }),
+        ));
+    }
+
+    if payload.encrypted_secret.len() > MAX_SECRET_SIZE_BYTES {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!("Secret too large (max {MAX_SECRET_SIZE_BYTES} UTF-8 bytes)"),
             }),
         ));
     }
@@ -58,6 +72,7 @@ pub async fn create_secret(
 
     match db::store_secret(
         &state.redis,
+        &state.protection,
         payload.encrypted_secret,
         payload.expiration,
         payload.metadata,
@@ -69,9 +84,9 @@ pub async fn create_secret(
         Err(e) => {
             tracing::error!("Redis error: {}", e);
             Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 Json(ErrorResponse {
-                    error: "Internal server error".to_string(),
+                    error: "Storage unavailable or capacity exceeded".to_string(),
                 }),
             ))
         }
@@ -204,6 +219,7 @@ pub async fn create_file(
 
     match db::store_file(
         &state.redis,
+        &state.protection,
         payload.metadata,
         payload.encrypted_data,
         payload.expiration,
@@ -215,9 +231,9 @@ pub async fn create_file(
         Err(e) => {
             tracing::error!("Redis error: {}", e);
             Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 Json(ErrorResponse {
-                    error: "Internal server error".to_string(),
+                    error: "Storage unavailable or capacity exceeded".to_string(),
                 }),
             ))
         }
@@ -321,6 +337,7 @@ mod tests {
             notifier: None,
             redis: Arc::new(Client::open("redis://127.0.0.1/").unwrap()),
             max_file_size_bytes: 2 * 1024 * 1024,
+            protection: crate::protection::Config::default(),
         }
     }
 
@@ -362,6 +379,70 @@ mod tests {
         let response = app.oneshot(req).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_secret_size_limits() {
+        // Exercise the production write routes before admission middleware.
+        for encrypted_secret in [
+            "a".repeat(MAX_SECRET_SIZE_BYTES + 1),
+            "é".repeat(MAX_SECRET_SIZE_BYTES / 2 + 1),
+        ] {
+            let app = crate::write_routes().with_state(dummy_state());
+            let payload = serde_json::json!({
+                "encryptedSecret": encrypted_secret, "expiration": 3600
+            });
+            let req = Request::builder()
+                .method("POST")
+                .uri("/v1/secrets")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap();
+            let response = app.oneshot(req).await.unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let body = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert!(error["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("Secret too large"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_secret_at_size_limit_not_rejected() {
+        // The largest ciphertext the web app sends must pass both size checks;
+        // without Redis the request then fails on storage instead.
+        let app = crate::write_routes().with_state(dummy_state());
+        let payload = serde_json::json!({
+            "encryptedSecret": "a".repeat(MAX_SECRET_SIZE_BYTES), "expiration": 3600
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/secrets")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_ne!(response.status(), StatusCode::BAD_REQUEST);
+        assert_ne!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn test_secret_body_limit_with_large_file_setting() {
+        let mut state = dummy_state();
+        state.max_file_size_bytes = 20 * 1024 * 1024;
+        let app = crate::write_routes().with_state(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/secrets")
+            .header("content-type", "application/json")
+            .body(Body::from(" ".repeat(MAX_SECRET_BODY_BYTES + 1)))
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]
@@ -434,5 +515,24 @@ mod tests {
 
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_create_secret_rejects_oversized_metadata_before_storage() {
+        let app = Router::new()
+            .route("/v1/secrets", post(create_secret))
+            .with_state(dummy_state());
+        let payload = serde_json::json!({
+            "encryptedSecret": "abc", "expiration": 3600,
+            "metadata": {"note": "\0".repeat(700)}
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/secrets")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 }

@@ -1,8 +1,7 @@
-use crate::{handlers, notifications::Notifier, AppState};
+use crate::{notifications::Notifier, AppState};
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
-    routing::{get, post},
     Router,
 };
 use redis::AsyncCommands;
@@ -41,16 +40,18 @@ async fn request(
 }
 
 fn app(redis: Arc<redis::Client>, notifier: Option<Arc<Notifier>>) -> Router {
-    Router::new()
-        .route("/v1/secrets", post(handlers::create_secret))
-        .route("/v1/secrets/:id", get(handlers::get_secret))
-        .route("/v1/files", post(handlers::create_file))
-        .route("/v1/files/:id", get(handlers::get_file))
-        .with_state(AppState {
-            redis,
-            notifier,
-            max_file_size_bytes: 2 * 1024 * 1024,
-        })
+    crate::build_app(AppState {
+        protection: crate::protection::Config {
+            writes_per_minute: 100,
+            ..Default::default()
+        },
+        redis,
+        notifier,
+        max_file_size_bytes: 2 * 1024 * 1024,
+    })
+    .layer(axum::Extension(axum::extract::ConnectInfo(
+        "192.0.2.50:1234".parse::<std::net::SocketAddr>().unwrap(),
+    )))
 }
 
 #[tokio::test]

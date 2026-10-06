@@ -17,7 +17,10 @@ paths:
   /v1/secrets:
     post:
       summary: Create a secret
-      description: Store an encrypted secret with time-based expiration
+      description: Store an encrypted secret with time-based expiration. Writes are rate limited and may require a configured bearer token.
+      security:
+        - {}
+        - WriteToken: []
       operationId: createSecret
       tags:
         - Secrets
@@ -28,22 +31,35 @@ paths:
             schema:
               $ref: '#/components/schemas/SecretRequest'
       responses:
-        '201':
+        '200':
           description: Secret created successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SecretResponse'
         '400':
-          description: Invalid expiration time or secret metadata
+          description: Invalid expiration time, notification email, or encrypted secret exceeds 1572864 UTF-8 bytes
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: Invalid JSON field type or request shape
+          description: Invalid JSON field type, request shape, or secret metadata (including the 4096-byte serialized metadata cap)
+        '401':
+          description: Missing or invalid write token when WRITE_API_TOKEN is configured
+          headers:
+            WWW-Authenticate:
+              schema:
+                type: string
+        '429':
+          description: Combined per-IP write allowance exhausted
+          headers:
+            Retry-After:
+              description: Seconds until the write allowance resets
+              schema:
+                type: integer
         '503':
-          description: Sender notification requested but SMTP is not configured
+          description: Storage capacity exhausted, Redis unavailable, or sender notification requested but SMTP is not configured
           content:
             application/json:
               schema:
@@ -54,6 +70,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: JSON request body exceeds 2097152 bytes (2 MiB)
 
   /v1/secrets/{id}:
     get:
@@ -109,7 +127,10 @@ paths:
   /v1/files:
     post:
       summary: Create a file
-      description: Store an encrypted file with metadata and time-based expiration
+      description: Store an encrypted file with metadata and time-based expiration. Writes are rate limited and may require a configured bearer token.
+      security:
+        - {}
+        - WriteToken: []
       operationId: createFile
       tags:
         - Files
@@ -120,7 +141,7 @@ paths:
             schema:
               $ref: '#/components/schemas/FileRequest'
       responses:
-        '201':
+        '200':
           description: File created successfully
           content:
             application/json:
@@ -134,12 +155,27 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
           description: Invalid JSON field type or request shape
+        '401':
+          description: Missing or invalid write token when WRITE_API_TOKEN is configured
+          headers:
+            WWW-Authenticate:
+              schema:
+                type: string
+        '429':
+          description: Combined per-IP write allowance exhausted
+          headers:
+            Retry-After:
+              description: Seconds until the write allowance resets
+              schema:
+                type: integer
         '503':
-          description: Sender notification requested but SMTP is not configured
+          description: Storage capacity exhausted, Redis unavailable, or sender notification requested but SMTP is not configured
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body exceeds the configured transport limit
         '500':
           description: Internal server error
           content:
@@ -199,6 +235,11 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 
 components:
+  securitySchemes:
+    WriteToken:
+      type: http
+      scheme: bearer
+      description: Required for writes only when WRITE_API_TOKEN is configured; otherwise writes are public.
   schemas:
     SecretRequest:
       type: object
@@ -208,7 +249,11 @@ components:
       properties:
         encryptedSecret:
           type: string
-          description: The encrypted secret data
+          maxLength: 1572864
+          description: |
+            The encrypted secret data. Maximum UTF-8 size after JSON decoding is
+            1572864 bytes (1.5 MiB), including any base64/encryption envelope.
+            The complete JSON request body is limited to 2097152 bytes (2 MiB).
           example: "U2FsdGVkX1+vupppZksvRf5pq5g5XjFRlipGLw=="
         expiration:
           type: integer
@@ -247,7 +292,10 @@ components:
         Optional, unencrypted metadata for a secret. Metadata values must be
         strings; leading and trailing whitespace is trimmed, and empty values are
         dropped. Metadata is not encrypted with the secret value and can be
-        returned by `GET /v1/secrets/{id}?peek=true`.
+        returned by `GET /v1/secrets/{id}?peek=true`. After normalization, the
+        complete serialized metadata object must be at most 4096 bytes (4 KiB),
+        including JSON keys and escaping. Consumers must escape metadata for the
+        rendering context; these strings are untrusted input, not safe HTML.
       properties:
         label:
           type: string
@@ -337,7 +385,7 @@ components:
       properties:
         originalFilename:
           type: string
-          description: Original filename
+          description: Untrusted original filename. Consumers must escape it for the rendering context.
           example: document.pdf
         contentType:
           type: string
