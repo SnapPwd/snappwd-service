@@ -41,10 +41,17 @@ async fn request(
 
 fn app(redis: Arc<redis::Client>, notifier: Option<Arc<Notifier>>) -> Router {
     crate::build_app(AppState {
+        protection: crate::protection::Config {
+            writes_per_minute: 100,
+            ..Default::default()
+        },
         redis,
         notifier,
         max_file_size_bytes: 2 * 1024 * 1024,
     })
+    .layer(axum::Extension(axum::extract::ConnectInfo(
+        "192.0.2.50:1234".parse::<std::net::SocketAddr>().unwrap(),
+    )))
 }
 
 #[tokio::test]

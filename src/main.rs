@@ -13,12 +13,14 @@ mod db;
 mod handlers;
 mod models;
 mod notifications;
+mod protection;
 
 #[derive(Clone)]
 pub struct AppState {
     pub notifier: Option<Arc<notifications::Notifier>>,
     pub redis: Arc<Client>,
     pub max_file_size_bytes: usize,
+    pub protection: protection::Config,
 }
 
 #[tokio::main]
@@ -54,6 +56,7 @@ async fn main() {
         notifier,
         redis: client,
         max_file_size_bytes,
+        protection: protection::Config::from_env(),
     };
 
     let app = build_app(state);
@@ -62,22 +65,25 @@ async fn main() {
     let addr = format!("0.0.0.0:{}", port);
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     tracing::info!("listening on {}", listener.local_addr().unwrap());
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
 fn build_app(state: AppState) -> Router {
     // Allow base64 and JSON overhead for files; secrets have a separate limit.
     let body_limit = std::cmp::max(10 * 1024 * 1024, state.max_file_size_bytes * 2);
 
-    Router::new()
+    write_routes()
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            protection::guard,
+        ))
         .route("/openapi.yaml", get(handlers::openapi))
-        .route(
-            "/v1/secrets",
-            post(handlers::create_secret)
-                .layer(DefaultBodyLimit::max(handlers::MAX_SECRET_BODY_BYTES)),
-        )
         .route("/v1/secrets/:id", get(handlers::get_secret))
-        .route("/v1/files", post(handlers::create_file))
         .route("/v1/files/:id", get(handlers::get_file))
         .layer(DefaultBodyLimit::max(body_limit))
         .with_state(state)
@@ -87,3 +93,13 @@ fn build_app(state: AppState) -> Router {
 
 #[cfg(test)]
 mod notification_tests;
+
+fn write_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/v1/secrets",
+            post(handlers::create_secret)
+                .layer(DefaultBodyLimit::max(handlers::MAX_SECRET_BODY_BYTES)),
+        )
+        .route("/v1/files", post(handlers::create_file))
+}
