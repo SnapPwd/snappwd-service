@@ -14,7 +14,9 @@ use axum::{
     Json,
 };
 
-pub const MAX_SECRET_SIZE_BYTES: usize = 1024 * 1024;
+// 1.5 MiB: matches the web app's bound on the base64-encoded ciphertext of a
+// 1 MiB plaintext secret.
+pub const MAX_SECRET_SIZE_BYTES: usize = 1024 * 1024 * 3 / 2;
 pub const MAX_SECRET_BODY_BYTES: usize = 2 * 1024 * 1024;
 
 const MIN_EXPIRATION_SECONDS: u64 = 60;
@@ -404,6 +406,25 @@ mod tests {
                 .unwrap()
                 .starts_with("Secret too large"));
         }
+    }
+
+    #[tokio::test]
+    async fn test_create_secret_at_size_limit_not_rejected() {
+        // The largest ciphertext the web app sends must pass both size checks;
+        // without Redis the request then fails on storage instead.
+        let app = crate::build_app(dummy_state());
+        let payload = serde_json::json!({
+            "encryptedSecret": "a".repeat(MAX_SECRET_SIZE_BYTES), "expiration": 3600
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/secrets")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_ne!(response.status(), StatusCode::BAD_REQUEST);
+        assert_ne!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]

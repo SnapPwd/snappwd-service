@@ -51,7 +51,7 @@ Configuration is handled via environment variables:
 
 ## Secret payload limits
 
-`encryptedSecret` is limited to **1 MiB (1048576 UTF-8 bytes)** after JSON decoding,
+`encryptedSecret` is limited to **1.5 MiB (1572864 UTF-8 bytes)** after JSON decoding,
 including the ciphertext's encoding/encryption envelope, rather than the original
 plaintext size. Larger values return `400`. The complete `POST /v1/secrets` JSON
 body is limited to **2 MiB (2097152 bytes)** and larger bodies return `413`,
