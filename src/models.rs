@@ -1,6 +1,8 @@
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
+pub const MAX_SECRET_METADATA_BYTES: usize = 4 * 1024;
+
 pub const MAX_SECRET_METADATA_LABEL_BYTES: usize = 120;
 pub const MAX_SECRET_METADATA_INTENDED_RECIPIENT_BYTES: usize = 254;
 pub const MAX_SECRET_METADATA_NOTE_BYTES: usize = 1000;
@@ -83,6 +85,14 @@ impl SecretMetadata {
                 }
                 _ => return Err(format!("metadata contains unknown field `{field}`")),
             }
+        }
+
+        // Bound the actual Redis representation, including JSON escaping.
+        let serialized = serde_json::to_vec(&metadata).map_err(|err| err.to_string())?;
+        if serialized.len() > MAX_SECRET_METADATA_BYTES {
+            return Err(format!(
+                "metadata must be at most {MAX_SECRET_METADATA_BYTES} serialized JSON bytes"
+            ));
         }
 
         if metadata.is_empty() {
@@ -436,6 +446,46 @@ mod tests {
         let err = serde_json::from_value::<SecretRequest>(json).unwrap_err();
 
         assert!(err.to_string().contains("metadata.label must be at most"));
+    }
+
+    #[test]
+    fn test_secret_metadata_serialized_size_boundary() {
+        // Control characters expand to six bytes each in JSON, while still
+        // satisfying the note's 1000-byte field limit.
+        let note = format!("{}{}", "\0".repeat(680), "a".repeat(5));
+        let metadata = serde_json::json!({"note": note});
+        assert_eq!(
+            serde_json::to_vec(&metadata).unwrap().len(),
+            MAX_SECRET_METADATA_BYTES
+        );
+        let request = serde_json::json!({
+            "encryptedSecret": "abc", "expiration": 3600, "metadata": metadata
+        });
+        assert!(serde_json::from_value::<SecretRequest>(request.clone()).is_ok());
+
+        let mut oversized = request;
+        oversized["metadata"]["note"] = serde_json::json!(format!("{}a", note));
+        let err = serde_json::from_value::<SecretRequest>(oversized).unwrap_err();
+        assert!(err.to_string().contains("serialized JSON bytes"));
+    }
+
+    #[test]
+    fn test_sender_email_is_not_subject_to_metadata_validation() {
+        // The notification address is a top-level field, so it is accepted
+        // with or without metadata and never hits the metadata allowlist.
+        let request = serde_json::json!({
+            "encryptedSecret": "abc", "expiration": 3600,
+            "senderEmail": "sender@example.com"
+        });
+        let parsed = serde_json::from_value::<SecretRequest>(request.clone()).unwrap();
+        assert_eq!(parsed.sender_email.as_deref(), Some("sender@example.com"));
+        assert_eq!(parsed.metadata, None);
+
+        let mut with_metadata = request;
+        with_metadata["metadata"] = serde_json::json!({"label": "staging"});
+        let parsed = serde_json::from_value::<SecretRequest>(with_metadata).unwrap();
+        assert_eq!(parsed.sender_email.as_deref(), Some("sender@example.com"));
+        assert_eq!(parsed.metadata.unwrap().label.as_deref(), Some("staging"));
     }
 
     #[test]

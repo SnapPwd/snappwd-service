@@ -11,9 +11,27 @@ This service powers:
 ## Architecture
 
 - **Zero-Knowledge Payload Storage**: The service receives *already encrypted* data. It never sees encryption keys or the plaintext contents of secrets/files.
-  - **Note**: Metadata is *not* encrypted. File `originalFilename` and `contentType`, plus any arbitrary secret `metadata` (e.g. `{"label": "API key for staging"}`), are stored in plaintext in Redis and returned to anyone with the ID via `?peek=true`. Filenames and labels often reveal what a secret is — omit sensitive metadata, or encrypt it client-side before submission.
+  - **Note**: Metadata is *not* encrypted. File `originalFilename` and `contentType`, plus supported secret `metadata` (e.g. `{"label": "API key for staging"}`), are stored in plaintext in Redis and returned to anyone with the ID via `?peek=true`. Filenames and labels often reveal what a secret is — omit sensitive metadata, or encrypt it client-side before submission.
 - **Ephemeral**: Data is stored in Redis with automatic expiration (TTL).
 - **Stateless**: No persistent database (SQL/NoSQL) is required, just Redis.
+
+## Metadata limits and rendering
+
+Secret metadata accepts only `label`, `intendedRecipient`, `note`, `rotateBy`,
+`rotationReason`, and `shareType`, with respective limits of 120, 254, 1000, 64,
+240, and 64 UTF-8 bytes after trimming. Empty values are dropped. The normalized
+metadata object is additionally limited to **4 KiB (4096 serialized JSON bytes)**,
+including keys and JSON escaping. Invalid metadata returns `422`. These limits
+apply to new submissions; legacy stored metadata remains readable until expiry.
+
+The notification address is not metadata: `senderEmail` is a separate top-level
+request field (see [Sender reveal notifications](#sender-reveal-notifications)),
+so these limits and the field allowlist do not apply to it.
+
+All returned metadata is **untrusted input**. Consumers must use text rendering
+or context-appropriate escaping for labels, notes, file `originalFilename`, and
+other metadata. Never insert them as raw HTML. Size/schema validation does not
+make a string safe to render.
 
 ## Prerequisites
 
