@@ -19,6 +19,11 @@ fn current_timestamp() -> u64 {
         .as_secs()
 }
 
+/// Store an encrypted secret under a new `sps-` id and return that id.
+///
+/// `budget` carries the storage limits (`max_bytes`, `max_keys`) the write is
+/// admitted against; when Redis is at capacity the secret is not stored and
+/// an error is returned.
 pub async fn store_secret(
     client: &Client,
     budget: &crate::protection::Config,
@@ -110,6 +115,11 @@ pub async fn peek_secret(
     }
 }
 
+/// Store an encrypted file under a new `spf-` id and return that id.
+///
+/// `budget` carries the storage limits (`max_bytes`, `max_keys`) the write is
+/// admitted against; when Redis is at capacity the file is not stored and
+/// an error is returned.
 pub async fn store_file(
     client: &Client,
     budget: &crate::protection::Config,
