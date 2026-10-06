@@ -492,4 +492,23 @@ mod tests {
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
+
+    #[tokio::test]
+    async fn test_create_secret_rejects_oversized_metadata_before_storage() {
+        let app = Router::new()
+            .route("/v1/secrets", post(create_secret))
+            .with_state(dummy_state());
+        let payload = serde_json::json!({
+            "encryptedSecret": "abc", "expiration": 3600,
+            "metadata": {"note": "\0".repeat(700)}
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/secrets")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
 }
