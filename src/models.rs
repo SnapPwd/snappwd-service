@@ -470,6 +470,25 @@ mod tests {
     }
 
     #[test]
+    fn test_sender_email_is_not_subject_to_metadata_validation() {
+        // The notification address is a top-level field, so it is accepted
+        // with or without metadata and never hits the metadata allowlist.
+        let request = serde_json::json!({
+            "encryptedSecret": "abc", "expiration": 3600,
+            "senderEmail": "sender@example.com"
+        });
+        let parsed = serde_json::from_value::<SecretRequest>(request.clone()).unwrap();
+        assert_eq!(parsed.sender_email.as_deref(), Some("sender@example.com"));
+        assert_eq!(parsed.metadata, None);
+
+        let mut with_metadata = request;
+        with_metadata["metadata"] = serde_json::json!({"label": "staging"});
+        let parsed = serde_json::from_value::<SecretRequest>(with_metadata).unwrap();
+        assert_eq!(parsed.sender_email.as_deref(), Some("sender@example.com"));
+        assert_eq!(parsed.metadata.unwrap().label.as_deref(), Some("staging"));
+    }
+
+    #[test]
     fn test_stored_secret_serialization() {
         let stored = StoredSecret {
             sender_email: None,

@@ -24,6 +24,10 @@ metadata object is additionally limited to **4 KiB (4096 serialized JSON bytes)*
 including keys and JSON escaping. Invalid metadata returns `422`. These limits
 apply to new submissions; legacy stored metadata remains readable until expiry.
 
+The notification address is not metadata: `senderEmail` is a separate top-level
+request field (see [Sender reveal notifications](#sender-reveal-notifications)),
+so these limits and the field allowlist do not apply to it.
+
 All returned metadata is **untrusted input**. Consumers must use text rendering
 or context-appropriate escaping for labels, notes, file `originalFilename`, and
 other metadata. Never insert them as raw HTML. Size/schema validation does not
