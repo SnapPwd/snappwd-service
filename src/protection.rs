@@ -1,7 +1,7 @@
 use crate::{models::ErrorResponse, AppState};
 use axum::{
     extract::{ConnectInfo, Request, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
@@ -14,6 +14,7 @@ pub struct Config {
     pub max_keys: u64,
     pub writes_per_minute: u64,
     pub write_token: Option<String>,
+    pub client_info_token: Option<String>,
     pub trusted_proxies: Vec<IpAddr>,
 }
 
@@ -24,6 +25,7 @@ impl Default for Config {
             max_keys: 10_000,
             writes_per_minute: 10,
             write_token: None,
+            client_info_token: None,
             trusted_proxies: vec![],
         }
     }
@@ -42,18 +44,20 @@ impl Config {
                 Err(_) => panic!("{name} must be valid UTF-8"),
             }
         }
-        let defaults = Self::default();
-        let write_token = match std::env::var("WRITE_API_TOKEN") {
-            Ok(token) => {
-                assert!(
-                    token.len() >= 32 && token.bytes().all(|b| b.is_ascii_graphic()),
-                    "WRITE_API_TOKEN must contain at least 32 printable non-space ASCII characters"
-                );
-                Some(token)
+        fn token(name: &str) -> Option<String> {
+            match std::env::var(name) {
+                Ok(token) => {
+                    assert!(
+                        token.len() >= 32 && token.bytes().all(|b| b.is_ascii_graphic()),
+                        "{name} must contain at least 32 printable non-space ASCII characters"
+                    );
+                    Some(token)
+                }
+                Err(std::env::VarError::NotPresent) => None,
+                Err(_) => panic!("{name} must be valid UTF-8"),
             }
-            Err(std::env::VarError::NotPresent) => None,
-            Err(_) => panic!("WRITE_API_TOKEN must be valid UTF-8"),
-        };
+        }
+        let defaults = Self::default();
         let trusted_proxies = std::env::var("TRUSTED_PROXY_IPS")
             .unwrap_or_default()
             .split(',')
@@ -68,7 +72,8 @@ impl Config {
             max_bytes: positive("STORAGE_MAX_BYTES", defaults.max_bytes),
             max_keys: positive("STORAGE_MAX_KEYS", defaults.max_keys),
             writes_per_minute: positive("WRITE_REQUESTS_PER_MINUTE", defaults.writes_per_minute),
-            write_token,
+            write_token: token("WRITE_API_TOKEN"),
+            client_info_token: token("CLIENT_INFO_TOKEN"),
             trusted_proxies,
         }
     }
@@ -159,42 +164,108 @@ fn client_ip(request: &Request, config: &Config) -> Option<IpAddr> {
         .get::<ConnectInfo<SocketAddr>>()?
         .0
         .ip();
-    let peer = match peer {
-        IpAddr::V6(ip) => ip.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(peer),
-        _ => peer,
-    };
+    resolve_ip(peer, request.headers(), config)
+}
+
+fn unmap(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
+        _ => ip,
+    }
+}
+
+fn resolve_ip(peer: IpAddr, headers: &HeaderMap, config: &Config) -> Option<IpAddr> {
+    let peer = unmap(peer);
     if config.trusted_proxies.contains(&peer) {
         // Require a single IP overwritten by the trusted proxy, never accept a
         // client-controlled X-Forwarded-For chain.
-        let mut values = request.headers().get_all("x-real-ip").iter();
-        let ip = values.next()?.to_str().ok()?.parse::<IpAddr>().ok()?;
-        if values.next().is_some() {
-            return None;
-        }
-        Some(match ip {
-            IpAddr::V6(ip) => ip
-                .to_ipv4_mapped()
-                .map(IpAddr::V4)
-                .unwrap_or(IpAddr::V6(ip)),
-            _ => ip,
-        })
+        single(headers, "x-real-ip")?
+            .to_str()
+            .ok()?
+            .parse::<IpAddr>()
+            .ok()
+            .map(unmap)
     } else {
         Some(peer)
+    }
+}
+
+fn single<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a header::HeaderValue> {
+    let mut values = headers.get_all(name).iter();
+    let value = values.next()?;
+    values.next().is_none().then_some(value)
+}
+
+// Constant-time comparison for equal-length credentials.
+fn same(provided: &[u8], expected: &[u8]) -> bool {
+    provided.len() == expected.len()
+        && provided
+            .iter()
+            .zip(expected)
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            == 0
+}
+
+const MAX_ACCESSOR_FIELD_CHARS: usize = 256;
+
+/// Who retrieved a secret or file, as far as this service can tell. Every
+/// field is best-effort and the text fields are client-controlled.
+#[derive(Debug, Default, PartialEq)]
+pub struct Accessor {
+    pub ip: Option<IpAddr>,
+    pub user_agent: Option<String>,
+    pub location: Option<String>,
+}
+
+// Client-controlled text ends up in a notification email: keep printable
+// ASCII on one bounded line so it cannot forge extra lines or headers.
+fn text(headers: &HeaderMap, name: &str) -> Option<String> {
+    let value: String = single(headers, name)?
+        .to_str()
+        .ok()?
+        .chars()
+        .filter(|c| c.is_ascii_graphic() || *c == ' ')
+        .take(MAX_ACCESSOR_FIELD_CHARS)
+        .collect();
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+/// A frontend that retrieves on behalf of its visitors authenticates with
+/// `X-Client-Info-Token` and describes the visitor in `X-Client-*` headers.
+/// Anyone else is described by their own connection and `User-Agent`.
+pub fn accessor(peer: Option<IpAddr>, headers: &HeaderMap, config: &Config) -> Accessor {
+    let forwarded = match (
+        &config.client_info_token,
+        single(headers, "x-client-info-token"),
+    ) {
+        (Some(expected), Some(provided)) => same(provided.as_bytes(), expected.as_bytes()),
+        _ => false,
+    };
+    if forwarded {
+        // Never fall back to the peer here: it is the frontend, not the visitor.
+        Accessor {
+            ip: single(headers, "x-client-ip")
+                .and_then(|v| v.to_str().ok()?.parse::<IpAddr>().ok())
+                .map(unmap),
+            user_agent: text(headers, "x-client-user-agent"),
+            location: text(headers, "x-client-location"),
+        }
+    } else {
+        Accessor {
+            ip: peer.and_then(|peer| resolve_ip(peer, headers, config)),
+            user_agent: text(headers, "user-agent"),
+            location: None,
+        }
     }
 }
 
 pub async fn guard(State(state): State<AppState>, request: Request, next: Next) -> Response {
     if let Some(token) = &state.protection.write_token {
         let expected = format!("Bearer {token}");
-        // Constant-time comparison for equal-length credentials.
         let mut headers = request.headers().get_all(header::AUTHORIZATION).iter();
         let provided = headers.next().map(|v| v.as_bytes()).unwrap_or_default();
-        let mismatch = provided.len() != expected.len()
-            || provided
-                .iter()
-                .zip(expected.bytes())
-                .fold(0u8, |diff, (a, b)| diff | (*a ^ b))
-                != 0;
+        let mismatch = !same(provided, expected.as_bytes());
         if mismatch || headers.next().is_some() {
             let mut response = error(StatusCode::UNAUTHORIZED, "Valid write token required");
             response
@@ -262,6 +333,51 @@ mod tests {
         req.extensions_mut()
             .insert(ConnectInfo("192.0.2.1:1234".parse::<SocketAddr>().unwrap()));
         req
+    }
+
+    #[test]
+    fn accessor_trusts_forwarded_details_only_with_the_token() {
+        let token = "t".repeat(32);
+        let config = Config {
+            client_info_token: Some(token.clone()),
+            ..Default::default()
+        };
+        let peer = Some("192.0.2.1".parse().unwrap());
+        let mut headers = HeaderMap::new();
+        for (name, value) in [
+            ("user-agent", "node"),
+            ("x-client-ip", "::ffff:203.0.113.7"),
+            ("x-client-user-agent", "Mozilla/5.0\tFirefox"),
+            ("x-client-location", "Paris, FR, France"),
+        ] {
+            headers.insert(name, value.parse().unwrap());
+        }
+        let direct = Accessor {
+            ip: peer,
+            user_agent: Some("node".into()),
+            location: None,
+        };
+        // Spoofed headers without, or with a wrong, token are ignored.
+        assert_eq!(accessor(peer, &headers, &config), direct);
+        headers.insert("x-client-info-token", "x".repeat(32).parse().unwrap());
+        assert_eq!(accessor(peer, &headers, &config), direct);
+        assert_eq!(accessor(peer, &headers, &Config::default()), direct);
+
+        headers.insert("x-client-info-token", token.parse().unwrap());
+        assert_eq!(
+            accessor(peer, &headers, &config),
+            Accessor {
+                ip: Some("203.0.113.7".parse().unwrap()),
+                user_agent: Some("Mozilla/5.0Firefox".into()),
+                location: Some("Paris, FR, France".into()),
+            }
+        );
+        // The frontend's own address never stands in for the visitor's.
+        headers.remove("x-client-ip");
+        headers.insert("x-client-user-agent", "a".repeat(300).parse().unwrap());
+        let partial = accessor(peer, &headers, &config);
+        assert_eq!(partial.ip, None);
+        assert_eq!(partial.user_agent.unwrap().len(), MAX_ACCESSOR_FIELD_CHARS);
     }
 
     #[test]
