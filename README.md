@@ -1,12 +1,38 @@
 # SnapPwd Service (API)
 
 [![Live App](https://img.shields.io/badge/Live_App-snappwd.io-00C853?style=for-the-badge&logo=appveyor)](https://snappwd.io)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
 
 The high-performance, open-source backend API for [SnapPwd](https://snappwd.io). Built with Rust (Axum) and Redis.
 
 This service powers:
 - [SnapPwd Web](https://github.com/SnapPwd/snappwd-web) (Self-hosted frontend)
 - [SnapPwd CLI](https://github.com/SnapPwd/snappwd-cli)
+
+## Try it
+
+**Hosted**: [snappwd.io](https://www.snappwd.io) runs this service. No setup, nothing to install.
+
+**Self-hosted**: start the API and a Redis instance with Docker Compose:
+
+```bash
+git clone https://github.com/SnapPwd/snappwd-service.git
+cd snappwd-service
+docker compose up --build -d
+```
+
+The API listens on `http://localhost:8080`. Store and read back a secret with the [SnapPwd CLI](https://github.com/SnapPwd/snappwd-cli) (needs Node.js):
+
+```bash
+npx @snappwd/cli put "hello" --api-url http://localhost:8080/v1
+# Secret created successfully!
+# URL: http://localhost:8080/v1/g/sps-...#...
+
+npx @snappwd/cli get "<the URL printed above>" --api-url http://localhost:8080/v1
+# hello
+```
+
+For a browser UI on top of this API, see [snappwd-web](https://github.com/SnapPwd/snappwd-web). The [self-hosting guide](https://www.snappwd.io/docs/self-hosting) covers the full stack, and [Abuse protection and rollout](#abuse-protection-and-rollout) covers what to configure before exposing an instance publicly.
 
 ## Architecture
 
@@ -99,7 +125,7 @@ docker run -d \
 
 ## License
 
-MIT
+[MIT](LICENSE)
 
 ## Sender reveal notifications
 
