@@ -8,8 +8,8 @@ use crate::{
     AppState,
 };
 use axum::{
-    extract::{Path, Query, State},
-    http::{header, StatusCode},
+    extract::{ConnectInfo, Path, Query, State},
+    http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
@@ -97,6 +97,8 @@ pub async fn get_secret(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(params): Query<GetSecretParams>,
+    peer: Option<ConnectInfo<std::net::SocketAddr>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     if !id.starts_with("sps-") {
         return (
@@ -138,7 +140,12 @@ pub async fn get_secret(
         match db::get_secret(&state.redis, &id).await {
             Ok(Some(secret)) => {
                 if let (Some(email), Some(notifier)) = (&secret.sender_email, &state.notifier) {
-                    if notifier.send(email, &id).await.is_err() {
+                    let accessor = crate::protection::accessor(
+                        peer.map(|peer| peer.0.ip()),
+                        &headers,
+                        &state.protection,
+                    );
+                    if notifier.send(email, &id, &accessor).await.is_err() {
                         tracing::warn!("Reveal notification delivery failed");
                     }
                 }
@@ -244,6 +251,8 @@ pub async fn get_file(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(params): Query<GetFileParams>,
+    peer: Option<ConnectInfo<std::net::SocketAddr>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     if !id.starts_with("spf-") {
         return (
@@ -285,7 +294,12 @@ pub async fn get_file(
         match db::get_file(&state.redis, &id).await {
             Ok(Some(file)) => {
                 if let (Some(email), Some(notifier)) = (&file.sender_email, &state.notifier) {
-                    if notifier.send(email, &id).await.is_err() {
+                    let accessor = crate::protection::accessor(
+                        peer.map(|peer| peer.0.ip()),
+                        &headers,
+                        &state.protection,
+                    );
+                    if notifier.send(email, &id, &accessor).await.is_err() {
                         tracing::warn!("File reveal notification delivery failed");
                     }
                 }

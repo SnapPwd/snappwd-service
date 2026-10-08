@@ -26,6 +26,7 @@ async fn request(
                 .method(method)
                 .uri(uri)
                 .header("content-type", "application/json")
+                .header("user-agent", "lifecycle-test/1.0")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
         )
@@ -165,6 +166,8 @@ async fn lifecycle(is_file: bool) {
     let mail = received.try_recv().unwrap();
     assert!(mail.contains("To: sender@example.com"));
     assert!(mail.contains(id));
+    assert!(mail.contains("IP address: 192.0.2.50"));
+    assert!(mail.contains("User agent: lifecycle-test/1.0"));
     assert!(!mail.contains("ciphertext"));
     assert!(!mail.contains("private.txt"));
     assert!(!mail.contains("private-iv"));

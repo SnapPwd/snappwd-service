@@ -51,6 +51,7 @@ Configuration is handled via environment variables:
 | `STORAGE_MAX_BYTES` | Redis allocated-memory admission threshold, including legacy data and prospective serialized payload/overhead. | `134217728` (128 MiB) |
 | `STORAGE_MAX_KEYS` | Maximum keys in the selected Redis database, including legacy data and rate-limit keys. | `10000` |
 | `WRITE_API_TOKEN` | Optional bearer token for both POST routes; at least 32 non-space ASCII characters. | unset (public writes) |
+| `CLIENT_INFO_TOKEN` | Optional token letting a trusted frontend describe the visitor it retrieves for (see [Sender reveal notifications](#sender-reveal-notifications)); at least 32 non-space ASCII characters. | unset |
 | `TRUSTED_PROXY_IPS` | Comma-separated literal socket-peer IPs permitted to supply a single `X-Real-IP`. | empty |
 | `RUST_LOG` | Log level (e.g., `debug`, `info`). | `info` |
 
@@ -121,6 +122,18 @@ winner of atomic GETDEL sends a notification; peek, expiration, repeat access,
 and legacy records without an address never send mail. The email contains the
 secret/file ID, never ciphertext, keys, metadata, or a reveal link. It confirms API
 retrieval, since successful browser decryption is invisible to this service.
+
+The email also describes who retrieved the record: IP address, `User-Agent`, and
+an approximate location when one is supplied. By default these are the caller's
+own socket peer (or `X-Real-IP` from a `TRUSTED_PROXY_IPS` peer) and `User-Agent`,
+with no location. A frontend that retrieves server-side on behalf of its visitors
+would otherwise be reported as the accessor, so set `CLIENT_INFO_TOKEN` and have it
+send `X-Client-Info-Token: <token>` with `X-Client-IP`, `X-Client-User-Agent`, and
+optionally `X-Client-Location` (free text such as `Paris, IDF, France`) on reveal
+requests. Without a matching token those headers are ignored; with one, the
+caller's own address is never used as a fallback. Text fields are reduced to at
+most 256 printable ASCII characters. The user agent is client-controlled and
+unverified, and none of these details are stored or logged.
 
 Delivery is a single best-effort attempt awaited for at most five seconds.
 Failures are logged without addresses or SMTP error details and do not prevent

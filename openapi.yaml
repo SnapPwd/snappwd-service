@@ -79,6 +79,11 @@ paths:
       description: |
         Retrieve a secret. By default, the secret is deleted after retrieval (one-time access).
         Use `?peek=true` to view metadata without burning the secret.
+        When the sender asked for a reveal notification, a one-time retrieval
+        emails them the caller's IP address and `User-Agent`. A frontend holding
+        `CLIENT_INFO_TOKEN` may describe its visitor instead by sending
+        `X-Client-Info-Token` with `X-Client-IP`, `X-Client-User-Agent` and
+        optionally `X-Client-Location`; these headers are ignored otherwise.
       operationId: getSecret
       tags:
         - Secrets
@@ -189,6 +194,11 @@ paths:
       description: |
         Retrieve a file. By default, the file is deleted after retrieval (one-time access).
         Use `?peek=true` to view metadata without burning the file.
+        When the sender asked for a reveal notification, a one-time retrieval
+        emails them the caller's IP address and `User-Agent`. A frontend holding
+        `CLIENT_INFO_TOKEN` may describe its visitor instead by sending
+        `X-Client-Info-Token` with `X-Client-IP`, `X-Client-User-Agent` and
+        optionally `X-Client-Location`; these headers are ignored otherwise.
       operationId: getFile
       tags:
         - Files
