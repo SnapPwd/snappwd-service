@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `GET /health` liveness endpoint returning `{"status":"ok"}`. It does not check
+  Redis and is not subject to write protection.
+
 ## [0.1.0] - 2026-11-23
 
 ### Added

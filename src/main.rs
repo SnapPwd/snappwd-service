@@ -82,6 +82,7 @@ fn build_app(state: AppState) -> Router {
             state.clone(),
             protection::guard,
         ))
+        .route("/health", get(handlers::health))
         .route("/openapi.yaml", get(handlers::openapi))
         .route("/v1/secrets/:id", get(handlers::get_secret))
         .route("/v1/files/:id", get(handlers::get_file))

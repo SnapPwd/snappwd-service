@@ -24,6 +24,10 @@ const MAX_EXPIRATION_SECONDS: u64 = 2592000; // 30 days
 
 const OPENAPI_SPEC: &str = include_str!("../openapi.yaml");
 
+pub async fn health() -> impl IntoResponse {
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
 pub async fn openapi() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "application/yaml")], OPENAPI_SPEC)
 }
@@ -353,6 +357,23 @@ mod tests {
             max_file_size_bytes: 2 * 1024 * 1024,
             protection: crate::protection::Config::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn test_health_returns_ok() {
+        use axum::routing::get;
+
+        let app = Router::new().route("/health", get(health));
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
